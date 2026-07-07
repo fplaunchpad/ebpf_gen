@@ -242,8 +242,11 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
 
 ## Progress
 - [ ] M2.-1 bookkeeping (this section) committed
-- [ ] M2.0 `ir/SPEC.md` v0 (format, grammar, checker algorithm, rule catalog, name)
-      + adversarial review pass
+- [~] M2.0 `ir/SPEC.md` v0 ("Keel", working name) — draft 2 committed after 5-lens
+      adversarial review (28 findings triaged/fixed, incl. 3 unsound rules);
+      round-2 verification workflow running
+- [x] differential target re-pinned to kernel 7.0 (Ubuntu 26.04 VM `kernel7`);
+      M1 corpus re-run: zero divergences on 7.0.0-27 (identical to 6.8)
 - [ ] M2.1 F* metatheory: Ebpf.{Formula,Annot,Proof,CertCheck,Densify}.fst,
       end-to-end theorem (no admits), OCaml extraction wiring
 - [ ] M2.2 pipeline: parser + certifying prover + `irc`; verified checker validates;
