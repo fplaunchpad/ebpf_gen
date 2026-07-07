@@ -1,5 +1,52 @@
 # PCC for eBPF — Gap Analysis + Milestone 1 (arithmetic constraints in F*)
 
+## Progress (updated as milestones land)
+
+**Current goal: ARITHUNARY + ARITHBINREG + ARITHBINIMM (Veritas Fig. 14a classes)**
+mapped to the deep embedding as: `Neg`/`Swap`/`MovSX` (unary), `Alu w op dst (OpReg r)`
+(bin-reg), `Alu w op dst (OpImm i)` (bin-imm), plus `Mov` both forms.
+
+### Phase 0 — environment
+- [x] VM resized to 4 vCPU / 8 GB / 20 GB (2026-07-07)
+- [x] apt toolchain (clang, libbpf-dev, bpftool, opam, build tools)
+- [x] F* 2026.03.24 via opam (source build; binary-tarball path abandoned — GitHub
+      CDN too slow on this link) + Z3 4.13.3 (+ apt z3 4.8.12 fallback)
+- [ ] OCaml extraction wiring (`make extract`) — not yet needed; tactic dump bridge
+      (`Ebpf.Dump.fst`) covers manifest generation
+- [x] project mounted at /home/ubuntu/ebpf_gen in VM
+
+### Phase 1 — F* modules (all verified)
+- [x] `fstar/Ebpf.Ast.fst` — AST: all 13 ALU ops × {W32,W64} × {REG,IMM}, NEG,
+      MOV, MOVSX, byte swaps, `Assert_` pseudo-insn, Exit
+- [x] `fstar/Ebpf.Int.fst` — math-int semantics helpers (wrap/sext/trunc_div/bswap)
+- [x] `fstar/Ebpf.Semantics.fst` — executable step/run semantics; Total (ISA) vs
+      Defensive (div0/oversized-shift = stuck) observation levels
+- [x] `fstar/Ebpf.Interval.fst` — unsigned interval domain + transfer functions
+      + per-op soundness lemmas
+- [x] `fstar/Ebpf.Check.fst` — dual-mode checker (Strict | Kernel)
+- [x] `fstar/Ebpf.Sound.fst` — soundness theorem statement + proof
+- [x] `fstar/Ebpf.Build.fst` — `|>.` pipeline constructors, 6 positive examples,
+      2 mode-divergence witnesses, 5 universal-reject tests, 3 expect_failure negatives
+- [x] `fstar/Ebpf.Serialize.fst` — bytecode encoder (Assert_ erased) + hex dump
+- [x] **all modules verify under fstar.exe** (F* 2026.03.24 / Z3 4.13.3, 2026-07-07)
+- [x] soundness theorem machine-checked (no admits); Strict mode proven safe under
+      Defensive semantics (div/0 + oversized shifts = stuck), Kernel mode under Total
+- [x] fix found during verification: ADD/SUB/MUL transfer functions now const-fold
+      (exact wraparound for constant operands) — needed for ex_alu32's 32-bit wrap
+
+### Phase 2 — differential validation
+- [x] `harness/loader.c` (BPF_PROG_LOAD, verifier log capture) — built in VM
+- [x] `harness/diff.py` comparison driver
+- [x] manifest generation via tactic dump (`Ebpf.Dump.fst` + `gen_manifest.py`)
+- [x] **run on VM kernel 6.8.0-134: 13 programs, ZERO divergences** between
+      F* kernel-faithful mode and the real verifier; both divergence witnesses
+      (ex_div0_reg, ex_shift_reg) behave exactly as designed
+
+### Phase 3 — documentation
+- [x] `fstar/CONSTRAINTS.md` — 17-constraint transcription table (C1–C17)
+- [x] differential results section filled in (13-program table)
+- [x] final pass after verification
+
 ## Context
 
 Project: correct-by-construction eBPF via a specialised, refinement-typed eBPF IR.

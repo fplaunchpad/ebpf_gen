@@ -61,13 +61,16 @@ let tf_alu (n: pos) (op: alu_op) (a: iv n) (b: iv n) : iv n =
   match op with
   | ADD ->
     if a.ihi + b.ihi < pow2 n then mk (a.ilo + b.ilo) (a.ihi + b.ihi)
+    else if is_const a && is_const b then exact #n (wrap n (a.ilo + b.ilo))
     else havoc n
   | SUB ->
     if b.ihi <= a.ilo then mk (a.ilo - b.ihi) (a.ihi - b.ilo)
+    else if is_const a && is_const b then exact #n (wrap n (a.ilo - b.ilo))
     else havoc n
   | MUL ->
     if a.ihi * b.ihi < pow2 n
     then (mul_mono a.ilo a.ihi b.ilo b.ihi; mk (a.ilo * b.ilo) (a.ihi * b.ihi))
+    else if is_const a && is_const b then exact #n (wrap n (a.ilo * b.ilo))
     else havoc n
   | DIV ->
     if b.ilo > 0
@@ -106,7 +109,7 @@ let tf_alu_sound (n: pos) (op: alu_op) (a: iv n) (b: iv n)
   | ADD ->
     if a.ihi + b.ihi < pow2 n
     then FStar.Math.Lemmas.small_mod (d + s) (pow2 n)
-    else ()
+    else ()                (* const-const: d = a.ilo, s = b.ilo, exact wrap *)
   | SUB ->
     if b.ihi <= a.ilo
     then FStar.Math.Lemmas.small_mod (d - s) (pow2 n)

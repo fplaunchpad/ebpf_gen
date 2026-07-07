@@ -8,6 +8,11 @@ MODULES := Ebpf.Ast Ebpf.Int Ebpf.Semantics Ebpf.Interval Ebpf.Check Ebpf.Sound 
 
 verify: $(addsuffix .checked,$(MODULES))
 
+# manifest for the differential harness (tactic-print bridge)
+manifest: verify
+	$(FSTAR) $(FSTAR_FLAGS) Ebpf.Dump.fst | python3 ../harness/gen_manifest.py > ../harness/manifest.tsv
+	cat ../harness/manifest.tsv
+
 %.checked: %.fst | $(CACHE)
 	$(FSTAR) $(FSTAR_FLAGS) $<
 

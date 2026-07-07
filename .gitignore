@@ -1,3 +1,4 @@
-context/
-repos/
-pubs/
+fstar/.cache/
+fstar/out/
+harness/loader
+.tmp-dl/
