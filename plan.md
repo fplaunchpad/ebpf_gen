@@ -1,0 +1,160 @@
+# PCC for eBPF — Gap Analysis + Milestone 1 (arithmetic constraints in F*)
+
+## Context
+
+Project: correct-by-construction eBPF via a specialised, refinement-typed eBPF IR.
+Frontends (F*, Lean, Dafny, Verus) target the IR; a formally verified compiler emits
+bytecode + a proof certificate; a small kernel checker replaces the stock verifier's
+analysis. First milestone: transcribe the arithmetic (ALU) constraints from the
+literature into F* and write correct-by-construction arithmetic-only programs.
+
+Materials analysed (via parallel extraction agents; full reports in session transcript):
+- **VEP (NSDI'25)** `pubs/nsdi25-wu-xiwei.pdf` — two-stage sep-logic PCC, annotated-C
+  frontend. No per-ALU-opcode VC catalogue, no wraparound model (user asserts Z64,
+  internal asserts unbounded Z), no tnum/Spectre discussion, IR spec unpublished
+  (repo only) → confirms the frontend-agnostic-published-IR novelty claim.
+- **Veritas/SpecCheck (SOSP'25)** `pubs/ebpf_smt_fuzz-paper.pdf` +
+  `repos/veritas/ebpf-dafny-spec/spec.dfy` (3,311 lines) — **the single best
+  transcription source**: every insn is a ghost method, `requires` = verifier
+  acceptance, `ensures` = ISA semantics; complete per-opcode ALU catalogue (~76
+  methods) with file:line map. `enable_org` flag = kernel-faithful vs cleaned-up rules.
+- **BCF (SOSP'25)** `pubs/BCF.pdf` + `repos/BCF` — kernel proof checker (2,337 LOC),
+  QF_BV expr + 50-rule proof format (conclusions recomputed, avg proof 541 B, ~48 µs
+  check). Proofs stay small only because they cover on-demand single-path refinement;
+  the 31 MB figure is Nelson et al.'s Lean PCC proving *all* instructions — the naive
+  full-program-PCC regime. BCF checker can't bit-blast MUL/DIV/MOD and currently
+  trusts POLY_NORM/unknown rewrites (prototype soundness holes).
+
+Environment: multipass VM `test-clone` (Ubuntu 24.04, kernel 6.8, 2 vCPU / 2 GB, root
+available). No F*/Z3/Dafny/cvc5 installed on host or VM yet.
+
+## Gaps in the plan (the user's question — consolidated)
+
+1. **"The constraints" is three different things.** Kernel-faithful acceptance
+   (Veritas `enable_org=true`), cleaned-up consistent rules (Veritas "beacon" mode),
+   and actual runtime-safety obligations (what a clean-slate replacement needs).
+   E.g. kernel: reg-divisor div/0 is *accepted* (runtime x/0→0, x%0→dst) while imm 0
+   is rejected; reg shifts ≥ width accepted-and-havoced while imm shifts rejected.
+   A replacement verifier gets to *choose* its spec — must decide before transcribing.
+2. **F*/Z3 proofs are not shippable certificates.** Correct-by-construction in F* ≠
+   proof-carrying: the kernel can't re-run Z3. The certificate design (SMT proof à la
+   BCF vs per-instruction-checkable typing witness à la TAL vs VEP-style
+   symbolic-exec + entailment proofs) dictates *how* constraints should be encoded in
+   F* (deep embedding + typing judgment vs shallow refinements). BCF's data says
+   full-program SMT proofs blow up; per-point annotations checked locally
+   (linear, no solver) is the size-safe regime. This fork must be taken now, not later.
+3. **Arithmetic-only programs are nearly vacuous under the kernel-faithful spec.**
+   Real obligations only appear via: init-before-use, R10-not-dst, imm-form
+   div0/shift-range rejects (syntactic), R0-initialized-at-exit. The value-tracking
+   machinery (the research meat) is only exercised if we adopt strict semantic
+   preconditions (prove divisor≠0, shift<width for register forms) and/or a
+   bounds-assertion sink. Milestone needs a non-vacuity decision.
+4. **No named ground-truth semantics.** ALU32 zero-extension, MOVSX, imm
+   sign-extension (div/mod imm sign-extends 32→64), div/0 semantics, shift masking —
+   must be pinned to RFC 9669 + a pinned kernel version. The Dafny spec has known
+   quirks not to copy (Add64_IMM missing type requires; twocom2Abs32Bit masks with
+   0xEFFF_FFFF (typo); SDIV/SMOD by INT64_MIN falls into the div/0 branch).
+5. **Verifier ≠ checker.** The stock verifier also rewrites programs (ctx access
+   conversion, runtime div/0 patching, speculation barriers, helper inlining) and
+   feeds the JIT. A replacement must keep those transforms somewhere. Out of scope
+   for M1 but must be on the roadmap.
+6. **Spectre scope undefined.** All three papers essentially punt (BCF disables
+   refinement on speculative paths; Veritas has a bypass flag; VEP silent).
+   Decision: target privileged (CAP_BPF) programs initially; document it.
+7. **Value-domain choice.** Kernel: tnum + u64/s64/u32/s32 ranges. BCF: ranges only,
+   recovers bit-info by replaying ALU ops. Veritas: exact bv64 or full havoc. F*
+   refinements can be exact for straight-line code — more precise than the kernel —
+   but every fact claimed must be checkable by the eventual kernel checker.
+   Non-linear ops (MUL/DIV/MOD) are exactly where checkers get weak.
+8. **No validation loop.** Nothing ties "our spec accepts" to reality. Need
+   differential testing: serialize our IR programs to real bytecode, load on the VM
+   kernel, compare verdicts (Veritas' fuzzer method, reusable later at scale).
+9. **Toolchain gap.** No F* anywhere; VM (2 vCPU/2 GB) too small for F*+Z3 dev and
+   far too small for kernel builds. Decide host-vs-VM split.
+10. **Version pinning.** VM kernel is 6.8; BCF patches target ≥6.17-ish trees;
+    verifier behavior drifts per release. Pin kernel + ISA doc revision in the spec.
+11. **Positioning vs BCF.** BCF keeps the whole verifier and augments it; we remove
+    kernel analysis entirely. Must answer "why not just BCF": their approach retains
+    verifier complexity/cruft and per-load solver latency (avg 9 s analysis on
+    refinement-heavy programs); ours moves all reasoning to compile time — but then
+    must solve the certificate-size problem BCF sidesteps (→ gap 2).
+12. **Frontend-agnosticism risk.** Transcribing constraints as idiomatic F*
+    refinements can bake F*-isms into the IR. The IR spec (syntax, typing rules,
+    certificate format) should be documented in a tool-neutral way from day one.
+
+## Design decisions (confirmed with user)
+
+1. **Spec basis: both, flag-selected** — a mode flag (mirroring Veritas' `enable_org`)
+   selects *kernel-faithful* rules (accept reg-div/0 with ISA runtime semantics,
+   accept+havoc reg shifts ≥ width) or *strict clean-slate* rules (prove divisor≠0,
+   shift<width). Precisely documents where the two specs diverge — feeds the writeup.
+2. **Encoding: deep embedding + smart constructors** — instruction AST + executable
+   semantics + checker + soundness theorem; refinement-typed smart constructors give
+   the shallow-feeling authoring surface. Programs are serializable instruction lists;
+   the typing derivation is the future certificate (TAL-style, locally checkable).
+3. **Non-vacuity: strict preconditions + assert-bounds sink** — an `Assert (r ≤ K)`
+   pseudo-instruction (erased at serialization) exercises range reasoning through ALU
+   chains; strict mode adds divisor≠0 / shift<width / init-before-use / R0-at-exit.
+4. **Toolchain: everything in the VM** — grow `test-clone` (2→4 vCPU, 2→8 GB RAM,
+   9.6→20 GB disk; multipass set only grows, VM must be stopped). Install F* binary
+   release (bundled Z3) + opam/OCaml for extraction inside the VM. Host stays clean;
+   kernel loading tests run in the same VM with root.
+
+## Milestone 1 implementation plan
+
+### Phase 0 — environment (VM)
+- `multipass stop test-clone`; `multipass set local.test-clone.{cpus=4,memory=8G,disk=20G}`; restart.
+- Install: F* binary release (fstar.exe + z3 bundled), opam + OCaml (for extraction),
+  build tools, libbpf/bpftool + kernel headers (for the loader).
+- Mount or clone the project into the VM (`multipass mount /home/r41k0u/ebpf_gen ...`).
+
+### Phase 1 — F* development (new `fstar/` directory in repo)
+1. **`Ebpf.Ast.fst`** — arithmetic subset AST: ALU64/ALU32 ×
+   {ADD,SUB,MUL,DIV,SDIV,MOD,SMOD,AND,OR,XOR,LSH,RSH,ARSH,NEG,MOV,MOVSX,END} ×
+   {REG,IMM} + `Assert` pseudo-insn + EXIT. Straight-line only (no jumps) in M1.
+   Scalar-only register file (pointers are M2+).
+2. **`Ebpf.Semantics.fst`** — executable step semantics over
+   `regfile = reg → option u64` (None = uninit), transcribed from spec.dfy `ensures`
+   clauses cross-checked against RFC 9669: ALU32 zero-extension, MOVSX sign-extension,
+   div/mod imm sign-extension 32→64, x/0→0, x%0→dst, shift masking. Known Dafny-spec
+   quirks NOT copied (Add64_IMM missing requires; twocom2Abs32Bit 0xEFFF_FFFF typo;
+   SDIV/SMOD INT64_MIN-as-zero-divisor).
+3. **`Ebpf.Check.fst`** — the constraint transcription: `check : mode -> tystate ->
+   insn -> option tystate` from spec.dfy `requires` clauses (universal: dst≠R10,
+   operands initialized; strict mode: semantic divisor≠0 / shift<width / assert
+   bounds; kernel mode: syntactic imm rejects only, havoc semantics).
+   **Soundness theorem**: `check` succeeds ⟹ `step` never gets stuck (and in strict
+   mode: no div-by-zero, no out-of-range shift, asserts hold).
+4. **`Ebpf.Build.fst`** — smart constructors: `prog ts` indexed by typing state,
+   pipeline style (`start |> mov64i R1 255l |> ... |> exit`). 5–10 positive examples
+   (incl. BCF's shift_constraint pattern re-expressed) + negative tests via
+   `[@@expect_failure]`.
+5. **`Ebpf.Serialize.fst`** — instruction list → eBPF bytecode bytes (Assert erased),
+   extracted to OCaml. Encoding per the ISA: 8-byte insns, opcode = op|source|class.
+
+### Phase 2 — differential validation (VM, root)
+- Tiny C loader: reads serialized bytecode, bpf(2) BPF_PROG_LOAD (socket filter or
+  kprobe prog type — simplest ctx), captures verifier verdict + log.
+- Harness: for each example, compare {F* strict verdict, F* kernel-mode verdict,
+  real kernel 6.8 verdict}; log divergences.
+
+### Phase 3 — documentation
+- **`CONSTRAINTS.md`** — transcription table: per-opcode constraint ↔ spec.dfy
+  file:line ↔ kernel behavior ↔ our F* refinement, mode differences and divergences
+  flagged. Seeds the IR spec document and the 2–3 page writeup for Kartikeya.
+
+## Verification
+- All F* modules verify (`fstar.exe`); `[@@expect_failure]` negative tests fail for
+  the intended reason (wrong-precondition, not syntax).
+- Soundness theorem machine-checked, not admitted.
+- All positive examples serialize, load, and are ACCEPTED by the VM kernel verifier;
+  at least one strict-mode-rejected / kernel-accepted program (reg-div by possibly-
+  zero) and the mirror case documented in CONSTRAINTS.md.
+- End-to-end demo: shift_constraint-style program built in F*, proof obligations
+  discharged at construction, loaded successfully on the VM.
+
+## Roadmap context (post-M1, for orientation only)
+M2: conditional jumps → path-sensitive tystate + join/annotations (certificate shape
+becomes real). M3: memory (stack/ctx/map ptrs) — where assert-sink generalizes to
+access bounds. M4: certificate extraction + standalone checker (C, few hundred LOC,
+compare against BCF checker rules). Throughout: IR spec doc kept tool-neutral.
