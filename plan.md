@@ -11,8 +11,9 @@ mapped to the deep embedding as: `Neg`/`Swap`/`MovSX` (unary), `Alu w op dst (Op
 - [x] apt toolchain (clang, libbpf-dev, bpftool, opam, build tools)
 - [x] F* 2026.03.24 via opam (source build; binary-tarball path abandoned — GitHub
       CDN too slow on this link) + Z3 4.13.3 (+ apt z3 4.8.12 fallback)
-- [ ] OCaml extraction wiring (`make extract`) — not yet needed; tactic dump bridge
-      (`Ebpf.Dump.fst`) covers manifest generation
+- [x] OCaml extraction wiring — closed during M2: extracted Ebpf.{Ast..Check,
+      Serialize} compile against opam fstar.lib (dune, `-w -a` for projector
+      warnings) and run natively (smoke: serializer + Kernel-mode accept ✓)
 - [x] project mounted at /home/ubuntu/ebpf_gen in VM
 
 ### Phase 1 — F* modules (all verified)
