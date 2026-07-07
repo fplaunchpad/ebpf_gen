@@ -205,3 +205,48 @@ M2: conditional jumps → path-sensitive tystate + join/annotations (certificate
 becomes real). M3: memory (stack/ctx/map ptrs) — where assert-sink generalizes to
 access bounds. M4: certificate extraction + standalone checker (C, few hundred LOC,
 compare against BCF checker rules). Throughout: IR spec doc kept tool-neutral.
+
+---
+
+# Milestone 2 — frontend-agnostic annotated IR + proof certificates
+
+Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
+`~/.claude/plans/` (session); this section tracks decisions + progress.
+
+## Design decisions (confirmed 2026-07-07)
+1. **Own minimal proof format** (not BCF reuse) — consequence: the proof checker is
+   implemented AND verified in F* against the same formula semantics as the IR;
+   the end-to-end theorem covers the checker itself.
+2. **Annotations = SMT-LIB2 QF_BV subset** over r0..r10 (text); expr-arena binary
+   form for the kernel. Scaling to full ISA via type/region layer BESIDE the value
+   logic (M3), not by growing the formula language.
+3. **Full scope**: spec + F* metatheory + working pipeline + two-frontend demo
+   (F* + Python) + measurements.
+4. **TAL-style density** (user: minimize in-kernel TCB): kernel checker has NO
+   abstract domain — per insn either SP-exact (rebind dst, zero bytes) or weaken
+   (claim + small proof). Frontends author sparse; the userspace certifier
+   densifies. Delta-encoded annotations in a shared DAG arena.
+
+## Threat model (summary)
+- No transplanting: checker constructs every goal from the loaded bytecode itself;
+  certificates supply derivations only. Wrong program → wrong goals → reject.
+- No forging: proof steps carry rule+premises; conclusions recomputed; final
+  conclusion must equal the goal. End-to-end theorem quantifies over ARBITRARY
+  certificate bytes.
+- No assumption smuggling: no `@assume` in wire format; entry annotation pinned by
+  checker (all regs uninit).
+- Load-time TCB: the small checker only (no solver, no F*). Residual: semantics
+  model vs interpreter/JIT (differential testing), C rewrite vs verified reference
+  (M4), DoS hygiene (size caps, backward-only refs, linear pass).
+
+## Progress
+- [ ] M2.-1 bookkeeping (this section) committed
+- [ ] M2.0 `ir/SPEC.md` v0 (format, grammar, checker algorithm, rule catalog, name)
+      + adversarial review pass
+- [ ] M2.1 F* metatheory: Ebpf.{Formula,Annot,Proof,CertCheck,Densify}.fst,
+      end-to-end theorem (no admits), OCaml extraction wiring
+- [ ] M2.2 pipeline: parser + certifying prover + `irc`; verified checker validates;
+      kernel load sanity
+- [ ] M2.3 two-frontend demo: Ebpf.Emit.fst + python binding → same certificates
+- [ ] M2.4 measurements (bytes/insn, proof bytes, check time) + tamper-rejection
+      tests + docs
