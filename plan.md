@@ -293,6 +293,13 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
             the DSL evaluator**
       - [x] all 15 F* modules in `make verify` (no admits); prover complete for
             ground claims (structural + exact-eval fallback)
-- [ ] M2.4 measurements (bytes/insn, proof bytes, check time) vs BCF/VEP +
-      consolidated docs (much of the tamper-rejection + pipeline testing already
-      done via `irc selftest` and the M2.3.4 corpus)
+- [x] M2.4 measurements (`ir/MEASUREMENTS.md`; `irc measure`): 14-program corpus,
+      avg 3.1 proof steps (max 7), avg ~123 B cert (upper bound), arithmetic
+      checks ~1–4 µs; caveats documented (no-sharing byte upper bound;
+      bitwise check-time is an F*-extracted-logand artifact, not real cost).
+      Context vs BCF (541 B, ~48 µs) / VEP (5.8k–65k proof lines). Tamper
+      rejection already shown by `irc selftest`.
+
+## Milestone 2 status: COMPLETE (spec + verified metatheory + pipeline + DSL
+## frontend + measurements). Remaining staged items are v1/v2 (control flow,
+## memory) + the deferred bridge lemmas / binary cert format / Dafny frontend.

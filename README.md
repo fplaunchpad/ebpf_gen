@@ -76,15 +76,22 @@ theorem, not a test suite.
 | **M1** | Arithmetic constraints in F*: deep-embedded ISA, dual-mode checker, machine-checked soundness, bytecode serializer | **Done.** All modules verify; **zero-divergence** differential vs the real Linux verifier (kernels 6.8 and 7.0). |
 | **M2.0** | The Keel IR specification (tool-neutral): text + binary format, formula grammar, checker algorithm, proof-rule catalog, threat model | **Done** (revised after adversarial review). [`ir/SPEC.md`](ir/SPEC.md) |
 | **M2.1** | IR metatheory in F*: annotation semantics, a sound proof system, the term↔ISA simulation bridge, and the **end-to-end soundness theorem** | **Done** for the W64 arithmetic core; no admits. |
-| M2.2 | Userspace pipeline: parser, certifying prover, `irc` certifier around the extracted checker | Next. |
-| M2.3 / M2.4 | Two-frontend demo (F* + Python) · certificate-size & check-time measurements | Planned. |
+| **M2.2** | Userspace pipeline: `.kir` parser, certifying prover, `irc` certifier around the extracted verified checker | **Done.** DSL/hand programs certify + load on kernel 7.0; `irc selftest` shows forged/transplanted certificates rejected. |
+| **M2.3** | High-level ALU expression **DSL** (`Ebpf.Dsl`) → verified lowering + register allocation → `.kir` → certificate + bytecode | **Done.** 14-program corpus: all certify (verified), load ACCEPT on kernel 7.0, and `BPF_PROG_TEST_RUN` result matches the DSL evaluator. [`ir/dsl/`](ir/dsl/) |
+| **M2.4** | Certificate-size / proof-step / check-time measurements | **Done.** avg 3.1 proof steps, ~123 B certs, ~1–4 µs checks. [`ir/MEASUREMENTS.md`](ir/MEASUREMENTS.md) |
 
-**Machine-checked so far:** the M1 checker is sound against the ISA model;
-the annotation semantics is well-defined; the proof rules are individually
-sound; symbolic bindings provably track the real machine; and *an accepted
-program runs safely, for any certificate*. **Not yet proved (documented as
-staged):** strict-mode obligation/claim integration into the checker walk,
-and the definition-term bridge for SDIV/SMOD, ALU32, MOVSX, and byte swaps.
+**Milestone 2 is complete**: published IR spec, verified metatheory (15 F*
+modules, no admits), a working front-to-kernel pipeline, a high-level DSL
+frontend, and measurements.
+
+**Machine-checked:** the M1 checker is sound against the ISA model; the
+annotation semantics is well-defined; every proof rule is individually sound;
+symbolic bindings provably track the real machine; and *an accepted program
+runs safely, for any certificate*. **Staged for later milestones (documented,
+not assumed):** control flow (v1) and memory (v2); strict-mode
+obligation/claim integration into the checker walk; the definition-term
+bridge for SDIV/SMOD, ALU32, MOVSX, byte swaps; a binary certificate file
+format; a verified lowering; and the Dafny frontend.
 
 ## Repository layout
 
