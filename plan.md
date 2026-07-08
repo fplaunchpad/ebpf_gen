@@ -272,8 +272,12 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
       - [x] adversarial `selftest`: verified checker rejects false-goal,
             transplanted, and forged-rule certificates
       - [x] reproducible: `make extract` (fstar) → `make build`/`run`/`selftest`
-      - [ ] binary certificate file format; DIV/SHIFT claim proving (needs the
-            staged ITE_F/substitution + imm-shift rules); full SMT-LIB parsing
+      - [x] DIV/MOD claim proving: added verified DivIteLe/DivIteBound/ModLe/
+            ModBound/EqUle rules to Ebpf.Proof; prover uses them + an
+            EvalEq+EqUle fallback for any ground term (shift/or/xor/sub/sdiv);
+            div.kir/mod.kir certify and load on kernel 7.0
+      - [ ] binary certificate file format; full SMT-LIB parsing; non-ground
+            (symbolic, v1) claim proving
 - [ ] M2.3 two-frontend demo: Ebpf.Emit.fst + python binding → same certificates
 - [ ] M2.4 measurements (bytes/insn, proof bytes, check time) + tamper-rejection
       tests + docs

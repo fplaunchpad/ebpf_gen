@@ -203,7 +203,33 @@ let rec plan (t: F.term) : Z.t * (pbuf -> int) =
     if Z.geq sum two64 then raise (Cannot_prove "add bound overflows 64 bits");
     (sum, fun buf -> let ia = ea buf in let ib = eb buf in
                      emit buf (P.R_MonoAdd (z ia, z ib, t)))
-  | _ -> raise (Cannot_prove "unsupported term shape (div/shift/or/xor/sub staged)")
+  (* division: match the SPEC-5 ITE-wrapped defterm and use the fused rules.
+     If the divisor is a literal constant d>=1, R_DivIteBound gives the tight
+     bound(a)/d; otherwise R_DivIteLe gives bound(a). *)
+  | F.TIte (F.Atom (F.KEq, s, F.TC (_, zero)), F.TC (_, _), F.TOp2 (F.Udiv, a, _s2))
+    when Z.equal zero (z 0) ->
+    let (ba, ea) = plan a in
+    (match s with
+     | F.TC (_, d) when Z.geq d (z 1) ->
+       (Z.div ba d,
+        fun buf -> let ia = ea buf in
+                   let iq = emit buf (P.R_UgeConst (s, s)) in   (* (bvuge s d) *)
+                   emit buf (P.R_DivIteBound (z ia, z iq, t)))
+     | _ ->
+       (ba, fun buf -> let ia = ea buf in emit buf (P.R_DivIteLe (z ia, t))))
+  (* unsigned remainder: (urem a s) <= a, chained to a's constant bound *)
+  | F.TOp2 (F.Urem, a, _s) ->
+    let (ba, ea) = plan a in
+    (ba, fun buf -> let ia = ea buf in
+                    let im = emit buf (P.R_ModLe t) in       (* (bvule t a) *)
+                    emit buf (P.R_TransUle (z im, z ia)))     (* (bvule t (TC ba)) *)
+  (* universal fallback for any other GROUND term (or/xor/sub/shift/sdiv/...):
+     evaluate it and bridge to a bound via EvalEq + EqUle. *)
+  | _ ->
+    (match F.evalT t with
+     | FStar_Pervasives_Native.Some (Prims.Mkdtuple2 (_w, v)) ->
+       (v, fun buf -> let ie = emit buf (P.R_EvalEq t) in emit buf (P.R_EqUle (z ie)))
+     | FStar_Pervasives_Native.None -> raise (Cannot_prove "term does not evaluate (ill-formed)"))
 
 (* Prove goal atom (kind, term, bound); returns the rule list. *)
 let prove_claim (goal_kind: F.atomkind) (t: F.term) (k: Z.t) : P.rule list =
