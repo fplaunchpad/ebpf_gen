@@ -1,0 +1,4 @@
+(executable
+ (name irc)
+ (flags (:standard -w -a))
+ (libraries fstar.lib zarith stdint))

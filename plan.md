@@ -261,8 +261,19 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
             the CertCheck walk (proof-rule soundness already done)
       - [ ] SDIV/SMOD, ALU32, MOVSX, byte-swap definition-term bridge lemmas
       - [x] OCaml extraction wiring (done earlier this milestone)
-- [ ] M2.2 pipeline: parser + certifying prover + `irc`; verified checker validates;
-      kernel load sanity
+- [~] M2.2 pipeline (`ir/certifier/`, OCaml around extracted verified code):
+      - [x] `.kir` parser (instructions + `@assert (cmp rN const)` claims)
+      - [x] binding computation via extracted `Ebpf_Annot.defterm`
+      - [x] certifying prover (`plan`): tightest-bound proof synthesis for
+            MOV/AND/ADD/MUL/const via UleRefl/AndLeL-R/MonoAdd/MonoMul/Trans
+      - [x] verified validation: `Ebpf_CertCheck.accepts` (safety) +
+            `Ebpf_Proof.check_proof` (each claim's proof)
+      - [x] bytecode via extracted `Ebpf_Serialize`; loads ACCEPT on kernel 7.0
+      - [x] adversarial `selftest`: verified checker rejects false-goal,
+            transplanted, and forged-rule certificates
+      - [x] reproducible: `make extract` (fstar) → `make build`/`run`/`selftest`
+      - [ ] binary certificate file format; DIV/SHIFT claim proving (needs the
+            staged ITE_F/substitution + imm-shift rules); full SMT-LIB parsing
 - [ ] M2.3 two-frontend demo: Ebpf.Emit.fst + python binding → same certificates
 - [ ] M2.4 measurements (bytes/insn, proof bytes, check time) + tamper-rejection
       tests + docs

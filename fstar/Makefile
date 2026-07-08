@@ -20,9 +20,12 @@ manifest: verify
 $(CACHE):
 	mkdir -p $(CACHE)
 
-# OCaml extraction of the serializer + examples (needs opam fstar.lib)
+# OCaml extraction of all pipeline modules (needs opam fstar.lib).
+# Produces out/Ebpf_*.ml consumed by ir/certifier.
 extract: | $(CACHE)
-	$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml --extract 'Ebpf' Ebpf.Serialize.fst
+	$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml \
+	  --extract 'Ebpf.Ast Ebpf.Int Ebpf.Semantics Ebpf.Interval Ebpf.Check Ebpf.Formula Ebpf.Proof Ebpf.Annot Ebpf.CertCheck Ebpf.Serialize' \
+	  Ebpf.CertCheck.fst Ebpf.Serialize.fst Ebpf.Proof.fst
 
 clean:
 	rm -rf $(CACHE) out

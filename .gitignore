@@ -5,3 +5,5 @@ harness/loader
 repos/
 pubs/
 context/
+ir/certifier/bin/Ebpf_*.ml
+ir/certifier/_build/
