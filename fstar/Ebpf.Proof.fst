@@ -202,20 +202,39 @@ let rec all_valid_snoc (cs: list atom) (c: atom)
   | [] -> ()
   | x :: t -> all_valid_snoc t c
 
-#push-options "--z3rlimit 600 --fuel 3 --ifuel 3"
+(* Per-rule soundness lemmas. Each is its own small VC (F* caches per
+   definition), so a single rule change reverifies in seconds instead of
+   re-running one giant 21-case query. `apply_sound` is a thin dispatcher.
+   Each lemma's ensures is specialized to `apply cs (R_X ..)`, and handles a
+   malformed payload (wrong term shape) by the `apply = None` catch-all. *)
 
-let apply_sound (cs: list atom) (r: rule)
-  : Lemma (requires all_valid cs)
-          (ensures (match apply cs r with | Some c -> valid c | None -> True)) =
-  match r with
-  | R_EvalEq _ -> ()
-  | R_UleConst _ _ -> ()
-  | R_UltConst _ _ -> ()
-  | R_UgeConst _ _ -> ()
-  | R_NeConst _ _ -> ()
-  | R_UleRefl _ -> ()
-  | R_EqRefl _ -> ()
-  | R_DivLe p (TOp2 Udiv a b) ->
+let ensures_of (cs: list atom) (r: rule) : prop =
+  match apply cs r with | Some c -> valid c | None -> True
+
+(* opaque `ensures_of` closes the dispatcher by congruence; this un-opaques it
+   on demand for downstream consumers (run_proof_sound). *)
+let ensures_of_elim (cs: list atom) (r: rule)
+  : Lemma (requires ensures_of cs r)
+          (ensures (match apply cs r with | Some c -> valid c | None -> True)) = ()
+
+#push-options "--z3rlimit 300 --fuel 3 --ifuel 3"
+
+(* leaves + plumbing (own lemmas so the dispatcher is pure delegation) *)
+let as_EvalEq   (cs: list atom) (t: term)      : Lemma (requires all_valid cs) (ensures ensures_of cs (R_EvalEq t)) = ()
+let as_UleConst (cs: list atom) (c1 c2: term)  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_UleConst c1 c2)) = ()
+let as_UltConst (cs: list atom) (c1 c2: term)  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_UltConst c1 c2)) = ()
+let as_UgeConst (cs: list atom) (c1 c2: term)  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_UgeConst c1 c2)) = ()
+let as_NeConst  (cs: list atom) (c1 c2: term)  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_NeConst c1 c2)) = ()
+let as_UleRefl  (cs: list atom) (t: term)      : Lemma (requires all_valid cs) (ensures ensures_of cs (R_UleRefl t)) = ()
+let as_EqRefl   (cs: list atom) (t: term)      : Lemma (requires all_valid cs) (ensures ensures_of cs (R_EqRefl t)) = ()
+let as_TransUle (cs: list atom) (p q: nat)     : Lemma (requires all_valid cs) (ensures ensures_of cs (R_TransUle p q)) = (nth_valid cs p; nth_valid cs q)
+let as_NeFromUge(cs: list atom) (p: nat)       : Lemma (requires all_valid cs) (ensures ensures_of cs (R_NeFromUge p)) = nth_valid cs p
+let as_EqUle    (cs: list atom) (p: nat)       : Lemma (requires all_valid cs) (ensures ensures_of cs (R_EqUle p)) = nth_valid cs p
+
+let as_DivLe (cs: list atom) (p: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_DivLe p t)) =
+  match t with
+  | TOp2 Udiv a b ->
     nth_valid cs p;
     (match nth cs p, evalT (TOp2 Udiv a b) with
      | Some (Atom KNe b' (TC _ 0)), Some _ ->
@@ -225,19 +244,39 @@ let apply_sound (cs: list atom) (r: rule)
           | _, _ -> ())
        else ()
      | _, _ -> ())
-  | R_ShrLe (TOp2 Lshr a s) ->
+  | _ -> ()
+
+let as_ShrLe (cs: list atom) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_ShrLe t)) =
+  match t with
+  | TOp2 Lshr a s ->
     (match evalT a, evalT s with
      | Some (| _, va |), Some (| _, vs |) -> if vs > 0 then div_le_self va (pow2 vs) else ()
      | _, _ -> ())
-  | R_AndLeL (TOp2 And a b) ->
+  | _ -> ()
+
+let as_AndLeL (cs: list atom) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_AndLeL t)) =
+  match t with
+  | TOp2 And a b ->
     (match evalT a, evalT b with
      | Some (| wa, va |), Some (| wb, vb |) -> if wa = wb then UInt.logand_le #wa va vb else ()
      | _, _ -> ())
-  | R_AndLeR (TOp2 And a b) ->
+  | _ -> ()
+
+let as_AndLeR (cs: list atom) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_AndLeR t)) =
+  match t with
+  | TOp2 And a b ->
     (match evalT a, evalT b with
      | Some (| wa, va |), Some (| wb, vb |) -> if wa = wb then UInt.logand_le #wa va vb else ()
      | _, _ -> ())
-  | R_ShrBound p (TOp2 Lshr a (TC kw kv)) ->
+  | _ -> ()
+
+let as_ShrBound (cs: list atom) (p: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_ShrBound p t)) =
+  match t with
+  | TOp2 Lshr a (TC kw kv) ->
     nth_valid cs p;
     (match nth cs p, evalT (TOp2 Lshr a (TC kw kv)) with
      | Some (Atom KUle a' (TC cw cv)), Some (| w, _ |) ->
@@ -249,7 +288,12 @@ let apply_sound (cs: list atom) (r: rule)
           | None -> ())
        else ()
      | _, _ -> ())
-  | R_MonoMul p q (TOp2 Mul a b) ->
+  | _ -> ()
+
+let as_MonoMul (cs: list atom) (p q: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_MonoMul p q t)) =
+  match t with
+  | TOp2 Mul a b ->
     nth_valid cs p; nth_valid cs q;
     (match nth cs p, nth cs q, evalT (TOp2 Mul a b) with
      | Some (Atom KUle a' (TC caw ca)), Some (Atom KUle b' (TC cbw cb)), Some (| w, _ |) ->
@@ -260,7 +304,12 @@ let apply_sound (cs: list atom) (r: rule)
           | _, _ -> ())
        else ()
      | _, _, _ -> ())
-  | R_MonoAdd p q (TOp2 Add a b) ->
+  | _ -> ()
+
+let as_MonoAdd (cs: list atom) (p q: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_MonoAdd p q t)) =
+  match t with
+  | TOp2 Add a b ->
     nth_valid cs p; nth_valid cs q;
     (match nth cs p, nth cs q, evalT (TOp2 Add a b) with
      | Some (Atom KUle a' (TC caw ca)), Some (Atom KUle b' (TC cbw cb)), Some (| w, _ |) ->
@@ -270,12 +319,14 @@ let apply_sound (cs: list atom) (r: rule)
           | _, _ -> ())
        else ()
      | _, _, _ -> ())
-  | R_TransUle p q -> nth_valid cs p; nth_valid cs q
-  | R_NeFromUge p -> nth_valid cs p
-  | R_EqUle p -> nth_valid cs p
-  | R_DivIteLe p (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) ->
+  | _ -> ()
+
+let as_DivIteLe (cs: list atom) (p: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_DivIteLe p t)) =
+  match t with
+  | TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2) ->
     nth_valid cs p;
-    (match nth cs p, evalT (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) with
+    (match nth cs p, evalT t with
      | Some (Atom KUle a' (TC cw cv)), Some (| w, _ |) ->
        if a' = a && s2 = s && cw = w && fits cw cv then
          (match evalT a, evalT s with
@@ -283,23 +334,38 @@ let apply_sound (cs: list atom) (r: rule)
           | _, _ -> ())
        else ()
      | _, _ -> ())
-  | R_DivIteBound p q (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) ->
+  | _ -> ()
+
+let as_DivIteBound (cs: list atom) (p q: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_DivIteBound p q t)) =
+  match t with
+  | TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2) ->
     nth_valid cs p; nth_valid cs q;
-    (match nth cs p, nth cs q, evalT (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) with
+    (match nth cs p, nth cs q, evalT t with
      | Some (Atom KUle a' (TC cw cv)), Some (Atom KUge s' (TC dw dv)), Some (| w, _ |) ->
        if a' = a && s2 = s && s' = s && cw = w && dw = w && fits cw cv && fits dw dv && dv >= 1 then
          (match evalT a, evalT s with
           | Some (| _, va |), Some (| _, vs |) ->
-            div_antitone va dv vs;                        (* va/vs <= va/dv (dv <= vs) *)
-            FStar.Math.Lemmas.lemma_div_le va cv dv       (* va/dv <= cv/dv *)
+            div_antitone va dv vs;
+            FStar.Math.Lemmas.lemma_div_le va cv dv
           | _, _ -> ())
        else ()
      | _, _, _ -> ())
-  | R_ModLe (TOp2 Urem a s) ->
+  | _ -> ()
+
+let as_ModLe (cs: list atom) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_ModLe t)) =
+  match t with
+  | TOp2 Urem a s ->
     (match evalT a, evalT s with
      | Some (| _, va |), Some (| _, vs |) -> if vs <> 0 then mod_le_self va vs else ()
      | _, _ -> ())
-  | R_ModBound p q (TOp2 Urem a s) ->
+  | _ -> ()
+
+let as_ModBound (cs: list atom) (p q: nat) (t: term)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs (R_ModBound p q t)) =
+  match t with
+  | TOp2 Urem a s ->
     nth_valid cs p; nth_valid cs q;
     (match nth cs p, nth cs q, evalT (TOp2 Urem a s) with
      | Some (Atom KUle s' (TC cw cv)), Some (Atom KNe s'' (TC _ 0)), Some (| w, _ |) ->
@@ -310,7 +376,37 @@ let apply_sound (cs: list atom) (r: rule)
        else ()
      | _, _, _ -> ())
   | _ -> ()
+#pop-options
 
+(* Thin dispatcher: PURE delegation. Each branch calls its per-rule lemma,
+   which returns `ensures_of cs (R_X ..)`; since `r = R_X ..` in the branch,
+   the goal `ensures_of cs r` closes by congruence (ensures_of is opaque here,
+   so no reasoning about `apply` internals is needed). Fast at low fuel. *)
+#push-options "--z3rlimit 100 --fuel 1 --ifuel 1"
+let apply_sound (cs: list atom) (r: rule)
+  : Lemma (requires all_valid cs) (ensures ensures_of cs r) =
+  match r with
+  | R_EvalEq t -> as_EvalEq cs t
+  | R_UleConst c1 c2 -> as_UleConst cs c1 c2
+  | R_UltConst c1 c2 -> as_UltConst cs c1 c2
+  | R_UgeConst c1 c2 -> as_UgeConst cs c1 c2
+  | R_NeConst c1 c2 -> as_NeConst cs c1 c2
+  | R_UleRefl t -> as_UleRefl cs t
+  | R_EqRefl t -> as_EqRefl cs t
+  | R_TransUle p q -> as_TransUle cs p q
+  | R_NeFromUge p -> as_NeFromUge cs p
+  | R_EqUle p -> as_EqUle cs p
+  | R_DivLe p t -> as_DivLe cs p t
+  | R_ShrLe t -> as_ShrLe cs t
+  | R_AndLeL t -> as_AndLeL cs t
+  | R_AndLeR t -> as_AndLeR cs t
+  | R_ShrBound p t -> as_ShrBound cs p t
+  | R_MonoMul p q t -> as_MonoMul cs p q t
+  | R_MonoAdd p q t -> as_MonoAdd cs p q t
+  | R_DivIteLe p t -> as_DivIteLe cs p t
+  | R_DivIteBound p q t -> as_DivIteBound cs p q t
+  | R_ModLe t -> as_ModLe cs t
+  | R_ModBound p q t -> as_ModBound cs p q t
 #pop-options
 
 (* ------------------------------------------------------------------ *)
@@ -334,6 +430,7 @@ let rec run_proof_sound (cs: list atom) (steps: list rule)
   | [] -> ()
   | r :: rest ->
     apply_sound cs r;
+    ensures_of_elim cs r;
     (match apply cs r with
      | Some c ->
        all_valid_snoc cs c;
