@@ -24,8 +24,8 @@ $(CACHE):
 # Produces out/Ebpf_*.ml consumed by ir/certifier.
 extract: | $(CACHE)
 	$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml \
-	  --extract 'Ebpf.Ast Ebpf.Int Ebpf.Semantics Ebpf.Interval Ebpf.Check Ebpf.Formula Ebpf.Proof Ebpf.Annot Ebpf.CertCheck Ebpf.Serialize' \
-	  Ebpf.CertCheck.fst Ebpf.Serialize.fst Ebpf.Proof.fst
+	  --extract 'Ebpf.Ast Ebpf.Int Ebpf.Semantics Ebpf.Interval Ebpf.Check Ebpf.Formula Ebpf.Proof Ebpf.Annot Ebpf.CertCheck Ebpf.Serialize Ebpf.Dsl Ebpf.Lower Ebpf.Emit' \
+	  Ebpf.CertCheck.fst Ebpf.Serialize.fst Ebpf.Proof.fst Ebpf.Emit.fst
 
 clean:
 	rm -rf $(CACHE) out
