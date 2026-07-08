@@ -278,6 +278,21 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
             div.kir/mod.kir certify and load on kernel 7.0
       - [ ] binary certificate file format; full SMT-LIB parsing; non-ground
             (symbolic, v1) claim proving
-- [ ] M2.3 two-frontend demo: Ebpf.Emit.fst + python binding → same certificates
-- [ ] M2.4 measurements (bytes/insn, proof bytes, check time) + tamper-rejection
-      tests + docs
+- [x] M2.3 high-level ALU-only F* expression DSL → KIR (small compiler; Python
+      binding dropped, Dafny deferred to its own milestone):
+      - [x] M2.3.0 apply_sound refactored into ~21 per-rule lemmas + dispatcher
+            (full reverify 15min → 41s; extracted checker unchanged)
+      - [x] M2.3.1 `Ebpf.Dsl` — expr/stmt AST + reference evaluator (oracle)
+      - [x] M2.3.2 `Ebpf.Lower` — DSL → instructions + register allocation;
+            runtime-validated vs evaluator
+      - [x] M2.3.3 `Ebpf.Emit` — `.kir` text emitter; `bpfc` driver; DSL programs
+            certify end-to-end and load on kernel 7.0
+      - [x] M2.3.4 14-program corpus + `bpfc` manifest + `loader -r`
+            (BPF_PROG_TEST_RUN) + `run_corpus.py` + `ir/dsl/README.md`:
+            **14/14 certify (verified), load ACCEPT, and TEST_RUN retval matches
+            the DSL evaluator**
+      - [x] all 15 F* modules in `make verify` (no admits); prover complete for
+            ground claims (structural + exact-eval fallback)
+- [ ] M2.4 measurements (bytes/insn, proof bytes, check time) vs BCF/VEP +
+      consolidated docs (much of the tamper-rejection + pipeline testing already
+      done via `irc selftest` and the M2.3.4 corpus)
