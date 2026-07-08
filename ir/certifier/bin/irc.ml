@@ -231,19 +231,40 @@ let rec plan (t: F.term) : Z.t * (pbuf -> int) =
        (v, fun buf -> let ie = emit buf (P.R_EvalEq t) in emit buf (P.R_EqUle (z ie)))
      | FStar_Pervasives_Native.None -> raise (Cannot_prove "term does not evaluate (ill-formed)"))
 
-(* Prove goal atom (kind, term, bound); returns the rule list. *)
+let eval_bound (t: F.term) : Z.t option =
+  match F.evalT t with
+  | FStar_Pervasives_Native.Some (Prims.Mkdtuple2 (_w, v)) -> Some v
+  | _ -> None
+
+(* Prove goal atom (kind, term, bound); returns the rule list. Tries the tight
+   structural proof first (small, generalizes to symbolic terms); if its bound
+   exceeds the claim (AND min-bound, mod dividend-bound, mul overflow), falls
+   back to an EXACT evaluation proof (EvalEq+EqUle) — complete for any ground
+   term whose true value satisfies the claim. *)
 let prove_claim (goal_kind: F.atomkind) (t: F.term) (k: Z.t) : P.rule list =
   let buf = { steps = []; n = 0 } in
   (match goal_kind with
    | F.KUle ->
-     let (b, em) = plan t in
-     let it = em buf in
-     if Z.equal b k then ()
-     else if Z.lt b k then begin
-       let ic = emit buf (P.R_UleConst (tc b, tc k)) in     (* (bvule b k) *)
-       let _ = emit buf (P.R_TransUle (z it, z ic)) in ()   (* (bvule t k) *)
+     (* emit a proof of (bvule t k) given a proof of (bvule t b) at step `it`
+        with b <= k (weakening via UleConst + TransUle). *)
+     let use_bound (b: Z.t) (it: int) : unit =
+       if Z.equal b k then ()
+       else (let ic = emit buf (P.R_UleConst (tc b, tc k)) in
+             let _ = emit buf (P.R_TransUle (z it, z ic)) in ()) in
+     let structural_ok =
+       try (let (b, em) = plan t in
+            if Z.leq b k then (let it = em buf in use_bound b it; true) else false)
+       with Cannot_prove _ -> false in
+     if structural_ok then ()
+     else begin
+       buf.steps <- []; buf.n <- 0;                 (* nothing emitted yet; reset defensively *)
+       match eval_bound t with
+       | Some v when Z.leq v k ->
+         let ie = emit buf (P.R_EvalEq t) in
+         let iu = emit buf (P.R_EqUle (z ie)) in     (* (bvule t v) *)
+         use_bound v iu
+       | _ -> raise (Cannot_prove "claim does not hold (true value exceeds bound)")
      end
-     else raise (Cannot_prove "computed bound exceeds claim")
    | _ -> raise (Cannot_prove "only bvule claims in v0-core prover"));
   List.rev buf.steps
 
