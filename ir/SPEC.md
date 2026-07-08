@@ -21,10 +21,11 @@ typing-derivation-as-certificate (TAL). Differences catalogued in §11.
 Goals (v0):
 - G1: frontends emit **instructions + sparse assertions**; densification and
   proof synthesis are the certifier's job.
-- G2: load-time TCB = the checker only: an append-only expression arena,
-  index-equality comparisons, a memoizing ground evaluator, and a fixed rule
-  table (~28 rules). No hashing, no search, no recursion beyond one memoized
-  arena pass.
+- G2: load-time TCB = the checker only: a read-only certificate-supplied
+  expression arena (validated up front), index-equality comparisons,
+  constant-size shape validations, a memoizing ground evaluator, and a
+  fixed rule table (~30 rules). No hashing, no search, no arena writes, no
+  recursion beyond one memoized arena pass.
 - G3: certificates cannot be transplanted or forged (§10).
 - G4: the checker is a reference model implemented and **verified in F***;
   the in-kernel C implementation (M4) must agree with it.
@@ -76,7 +77,8 @@ Mnemonics (exactly M1's `fstar/Ebpf.Ast.fst`):
 - `{add|sub|mul|div|sdiv|mod|smod|and|or|xor|lsh|rsh|arsh|mov}{32|64} dst, src`
   with `src` a register or immediate;
 - `neg{32|64} dst` (unary — no source operand);
-- `movsx{8|16}{32|64} dst, rs` and `movsx32_64 dst, rs` (register source only);
+- `movsx8_32 | movsx16_32 | movsx8_64 | movsx16_64 | movsx32_64 dst, rs`
+  (register source only; underscore spelling is canonical);
 - `le{16|32|64} dst`, `be{16|32|64} dst`, `bswap{16|32|64} dst`;
 - `@assert phi` (attaches to the state **after** the preceding instruction);
 - `exit`.
@@ -121,7 +123,14 @@ No signed comparison atoms in v0 (§1 non-goals).
 When instruction *i* writes `dst`, the checker rebinds `dst` to the
 **definition term** below, where `A = B(dst)`, `S = B(src)` are the *current*
 (pre-instruction) bindings, `K` an immediate after §3 width handling, and
-`x32 = ((_ extract 31 0) x)`. All eBPF-vs-SMT-LIB divergences are explicit:
+`x32 = ((_ extract 31 0) x)`. All eBPF-vs-SMT-LIB divergences are explicit.
+
+Read discipline: a row's binding requirements are exactly the bindings its
+definition term mentions — `mov{32,64} dst, src/K` and `movsx* dst, rs` do
+NOT read `dst` (an unbound dst is fine, matching M1 `Mov`); every other row
+reads the operands shown (unbound ⇒ reject, §6.2). The 32-bit rows follow
+the generic OP32 template except where a dedicated row overrides it
+(div32/sdiv32 use the ITE shape at width 32; shifts mask with `(_ bv31 32)`).
 
 | instruction | definition term (64-bit form) |
 |---|---|
@@ -141,8 +150,19 @@ When instruction *i* writes `dst`, the checker rebinds `dst` to the
 | `le{N} dst` | `((_ zero_extend 64-N) ((_ extract N-1 0) A))` |
 | `be{N}/bswap{N} dst` | `((_ zero_extend 64-N) (concat ((_ extract 7 0) A) ... ((_ extract N-1 N-8) A)))` — byte-reversal via concat of extracts |
 
-The certifier must emit exactly these shapes; the checker *constructs* them
-itself (the certificate cannot influence them).
+**Validation model (normative).** The arena — including every definition
+term — is *supplied by the certificate* and *validated by the checker*; the
+checker never appends nodes or searches for them. For each instruction the
+step record names the arena node claimed as its definition term, and the
+checker verifies, by a constant-size structural walk of that node (tag,
+width, aux, and argument indices compared against `B(dst)`, `B(src)`, and
+the decoded immediate), that it is **exactly** the §5 shape. Trust is
+unchanged versus checker-side construction — a node that deviates in any
+position is rejected — but syntactic-equality-is-index-equality becomes
+coherent: goals, bindings, claims, and proof subjects all live in one index
+space. (This is the discipline BCF's checker uses for its expression arena.)
+A certificate that duplicates structurally-equal nodes at different indices
+is only bloated, never unsound — its proofs simply fail to connect.
 
 ## 6. Checker algorithm (the load-time TCB)
 
@@ -153,103 +173,150 @@ requested mode or the load rejects. An "accepted" verdict means "safe under
 the mode the loader requested", never "safe under the mode the certificate
 chose".
 
-State: `bind : reg -> arena_index | ⊥`; `claims : set of arena atom indices`;
-`arena : append-only, bounds/width/arity-checked term DAG`.
+State: `bind : reg -> arena_index | ⊥`;
+`claims : bounded array of arena atom indices` (positions are stable;
+`FORGET` tombstones entries rather than compacting, so `HIT i` is a stable
+O(1) positional lookup); the certificate-supplied, upfront-validated
+`arena` (§8) is read-only.
 
-Per instruction, one linear pass, in this order:
-1. **Resolve + structural checks** (checker-internal; no certificate
-   content can override): dst ≠ r10; operand registers bound (≠ ⊥);
-   immediate divisor 0 and immediate shift ≥ width rejected; movsx32 only
-   at width 64; `r0` bound at `exit`; no code after `exit`. (M1 C1–C4, C7,
-   C15, C17.)
-2. **Safety obligations** (strict mode only), resolved against the
-   **pre-instruction** bindings — critically, *before* dst is rebound
-   (dst may be the divisor/shift-amount register):
+Phase 0 — **arena validation**: one pass over the arena checking tag
+validity, arity, width rules, strictly-backward argument indices, and
+kinding (terms vs atoms; atoms may appear only as ITE guards and never as
+term or atom operands). Caps enforced here (§8).
+
+Then, per instruction, one linear pass, in this order:
+1. **Declared claims attached before this instruction** (`@assert`
+   conjuncts; claims records carry the index of the instruction they
+   precede, and must appear in non-decreasing order): each is an arena atom
+   discharged by `HIT` or `PROVE`, then appended to `claims` and to the
+   **proven-claims list** reported on success. Claims may reference only
+   registers bound at this point (their atoms mention binding indices —
+   the certifier resolves register names; there is no REG node).
+   Processing claims first lets the very next instruction's safety
+   obligation HIT them (the assert-then-divide pattern).
+2. **Structural checks** (checker-internal; certificate content cannot
+   override): dst ≠ r10; the §5 read discipline (required operand bindings
+   ≠ ⊥); immediate divisor 0 and immediate shift ≥ width rejected; movsx32
+   only at width 64; `r0` bound at `exit`; no code after `exit`.
+   (M1 C1–C4, C7, C15, C17.)
+3. **Safety obligations** (strict mode only), over the **pre-instruction**
+   bindings — before dst is rebound (dst may be the divisor/shift-amount
+   register):
    - `div/sdiv/mod/smod{64} dst, rS` → obligation `(distinct S 0)`;
      32-bit forms → `(distinct ((_ extract 31 0) S) 0)`;
    - `lsh/rsh/arsh64 dst, rS` → `(bvult S (_ bv64 64))`;
      32-bit forms → `(bvult ((_ extract 31 0) S) (_ bv32 32))`.
-   Each obligation is discharged by a certificate step: `HIT i` (the atom is
-   already claims[i] — index equality) or `PROVE p` (a proof, §7, whose final
-   conclusion index equals the obligation's atom index). Kernel mode
-   generates no safety obligations (definition terms already carry total
-   ITE/masked semantics — M1 C5/C8).
-3. **Declared claims** at this point (`@assert` conjuncts, in program
-   order): each is an arena atom supplied by the certificate, discharged by
-   HIT or PROVE, then added to `claims` and appended to the **proven-claims
-   list** reported on success.
-4. **Rebind** dst per §5.
-5. Optional `FORGET {indices}`: removes atoms from `claims` (never touches
-   the arena — the arena is append-only for the whole check and freed
-   wholesale afterwards). Always sound; bounds the claims set.
+   The step record supplies the obligation's atom index; the checker
+   validates its shape (same constant-size walk as definition terms), then
+   requires `HIT i` (claims[i] equals the atom index, not tombstoned) or
+   `PROVE` (a §7 proof whose final conclusion matches the atom). Kernel
+   mode generates no safety obligations (definition terms already carry
+   total ITE/masked semantics — M1 C5/C8).
+4. **Rebind**: validate the step record's claimed definition-term node
+   against the §5 shape, then `bind(dst) := that index`.
+5. Optional `FORGET`: tombstone listed claim positions (never touches the
+   arena, which is read-only and freed wholesale after the check). Always
+   sound; bounds live-claims growth.
 
-Complexity and DoS hygiene: all comparisons are u32 index equality; rule
-applications do O(#premises) index work plus, for EVAL-class rules, ground
-evaluation **memoized per arena node** (each node evaluated at most once per
-program; total O(arena size)). The evaluator implements the totalized
-SMT-LIB semantics explicitly (division-by-zero cases return the defined
-values; the C implementation must guard before native div instructions).
-Caps: certificate size, arena node count, claims set size, proof step
-count — all rejected-by-default when exceeded. Arena args strictly
-backward-referencing; widths and arities validated at append.
+Complexity and DoS hygiene: all equality tests are u32 index comparisons;
+shape validations are constant-size walks; rule applications do
+O(#premises) index work plus, for EVAL-class rules, ground evaluation
+**memoized per arena node** (each node evaluated at most once per program;
+total O(arena size)). Groundness in v0 is structural: all leaves are
+constants (there is no REG or variable node), so every node is evaluable;
+the memo table doubles as the groundness witness for v1 when havoc
+variables appear. The evaluator implements the totalized SMT-LIB semantics
+explicitly (division-by-zero cases return the defined values; the C
+implementation must guard before native div instructions). Caps:
+certificate size, arena node count, claims array length, proof step
+count — reject-by-default when exceeded.
 
 ## 7. Proof system
 
-A proof is a list of steps; each step is `(rule_id, premises: earlier step
-indices, params: arena indices / small ints)`. **Conclusions are not on the
-wire**: the checker computes each step's conclusion (an arena atom index,
-appending to the arena if needed) from the rule table; any structural
-mismatch — arity, width, premise shape, side condition — rejects. The final
-step's conclusion index must equal the goal atom index.
+A proof is the sequence of steps consumed by one `PROVE` record (payload:
+`u32 n_steps`) from a single global cursor into the `proofs` array; after
+the last instruction the cursor must equal `proof_step_cnt` (no orphan
+steps). Each step is `{u16 rule_id, u8 n_premises, u8 n_params, u32
+args[]}` with `args` = premise entries first, then params; the wire counts
+must equal the rule table's constants exactly. **Premise indices are
+0-based and local to the current PROVE block**, and must be strictly less
+than the current step's index (no cross-proof references — proved facts are
+shared via `claims`, not via other proofs).
 
-Widths: every rule is width-generic but width-checked — all term operands of
-a rule application must share a width w, and all constant computations in
-conclusions and side conditions are performed at width w (e.g. `MONO_ADD`'s
-`ca+cb` is computed mod 2^w and its no-wrap side condition is `ca + cb <
-2^w` as unbounded integers).
+**Conclusions are not on the wire and are never arena nodes.** The checker
+holds each step's conclusion as an internal one-level shape
+`(atom_kind, lhs, rhs)` where each side is either an arena term index or an
+immediate value (for computed constants like `MONO_ADD`'s `ca+cb`). Rules
+consume premise shapes and params and emit a conclusion shape; any
+mismatch — arity, width, premise shape, side condition — rejects. The
+final step's shape must match the goal atom node one level deep: same atom
+kind, term sides index-equal, constant sides value-equal to the goal's
+constant node. No arena writes, no search.
+
+Widths: rules are width-generic but width-checked per the Params column —
+each rule states which operands must share a width w (ZEXT_BOUND
+legitimately spans two widths). All constant computations in conclusions
+and side conditions are performed at width w (e.g. `MONO_ADD`'s `ca+cb` is
+computed mod 2^w; its no-wrap side condition is `ca + cb < 2^w` over the
+unbounded integers).
 
 ### Rule catalog v0
 
-Leaves:
-| id | rule | conclusion | side condition |
-|----|------|-----------|----------------|
-| 0x02 | `CLAIMED i` | claims[i] | i ∈ claims |
-| 0x03 | `EVAL_EQ t` | `(= t c)`, c = memoized evaluation | t ground |
-| 0x04 | `ULE_CONST c1 c2` | `(bvule c1 c2)` | val(c1) ≤ val(c2) |
-| 0x05 | `NE_CONST c1 c2` | `(distinct c1 c2)` | val(c1) ≠ val(c2) |
-| 0x06 | `ULE_REFL t` | `(bvule t t)` | — |
-| 0x07 | `ULT_CONST c1 c2` | `(bvult c1 c2)` | val(c1) < val(c2) |
+Params column notation: `t`/`a`/`b` = arena term index; `c*` = arena index
+that must be a CONST node; `ite` = arena index of an ITE node; `pos` = u32
+argument slot (0 or 1); `k` = u32 immediate. Premise shapes are matched
+against the internal conclusion shapes of the referenced steps.
+
+Leaves (0 premises):
+| id | rule | params | conclusion | side condition |
+|----|------|--------|-----------|----------------|
+| 0x02 | `CLAIMED` | `i` (claims position) | shape of arena node claims[i] | not tombstoned |
+| 0x03 | `EVAL_EQ` | `t` | `(= t VAL(eval t))` | — (all v0 nodes ground) |
+| 0x04 | `ULE_CONST` | `c1 c2` | `(bvule c1 c2)` | val(c1) ≤ val(c2) |
+| 0x05 | `NE_CONST` | `c1 c2` | `(distinct c1 c2)` | val(c1) ≠ val(c2) |
+| 0x06 | `ULE_REFL` | `t` | `(bvule t t)` | — |
+| 0x07 | `ULT_CONST` | `c1 c2` | `(bvult c1 c2)` | val(c1) < val(c2) |
+| 0x08 | `EQ_REFL` | `t` | `(= t t)` | — |
+| 0x09 | `UGE_CONST` | `c1 c2` | `(bvuge c1 c2)` | val(c1) ≥ val(c2) |
 
 Equality plumbing:
-| 0x10 | `SYMM p` | `(= a b)` → `(= b a)` |
-| 0x11 | `TRANS_EQ p q` | `(= a b), (= b c)` → `(= a c)` |
-| 0x12 | `CONG op side p x` | `(= a b)` → `(= (op a x) (op b x))` (side selects arg position) |
-| 0x13 | `EQ_ULE p` | `(= a b)` → `(bvule a b)` |
-| 0x14 | `SUBST p q` | `(= a b)` + atom mentioning b at a param-selected position → same atom with a |
+| id | rule | premises | params | conclusion |
+|----|------|----------|--------|-----------|
+| 0x10 | `SYMM` | `(= a b)` | — | `(= b a)` |
+| 0x11 | `TRANS_EQ` | `(= a b)`, `(= b c)` | — | `(= a c)` |
+| 0x12 | `CONG` | `(= a b)` | `t` (a node `(op .. ..)` with a at slot `pos`), `pos` | `(= t t')` where t' = same node with b at pos — t' must also be a param (arena index), validated one level |
+| 0x13 | `EQ_ULE` | `(= a b)` | — | `(bvule a b)` |
+| 0x14 | `SUBST_L` | `(= a b)`, atom `(k b x)` | — | `(k a x)` (0x15 `SUBST_R` for right side) |
 
-ITE collapse (division definitions; **guard identity is index equality**):
-| 0x18 | `ITE_F p` | premise `(distinct s c)` where the subject term is literally `(ite (= s c) x y)` (same s, c indices) → `(= (ite (= s c) x y) y)` |
-| 0x19 | `ITE_T p` | premise `(= s c)` (same indices as the guard) → `(= (ite (= s c) x y) x)` |
+ITE collapse (division definitions; **guard identity is index equality** —
+the premise's operand indices must equal the guard node's operand indices):
+| 0x18 | `ITE_F` | `(distinct s c)` | `ite` = `(ite (= s c) x y)` | `(= ite y)` |
+| 0x19 | `ITE_T` | `(= s c)` | `ite` as above | `(= ite x)` |
 
 Unsigned-bounds rules (each reifies an `fstar/Ebpf.Interval.fst`-style
-lemma; subject terms must match §5 definition-term shapes structurally —
-that is what makes conclusions computable without search):
-| 0x20 | `TRANS_ULE p q` | `ule a b, ule b c` → `ule a c` |
-| 0x21 | `ULE_ULT p` | `ule a c1` → `ult a c2` | side: val(c1) < val(c2) |
-| 0x22 | `AND_LE_L` / 0x23 `AND_LE_R` | → `(bvule (bvand a b) a)` (resp. `b`) |
-| 0x24 | `SHR_LE` | → `(bvule (bvlshr a s) a)` — any s (masked or constant) |
-| 0x25 | `SHR_BOUND p` | `ule a c` → `(bvule (bvlshr a k) (c >> k))`, k const, val(k) < w |
-| 0x26 | `MONO_ADD p q` | `ule a ca, ule b cb` → `ule (bvadd a b) (ca+cb)` | side: no wrap at w |
-| 0x27 | `MONO_MUL p q` | `ule a ca, ule b cb` → `ule (bvmul a b) (ca*cb)` | side: no wrap at w |
-| 0x28 | `MONO_SHL p` | `ule a c` → `ule (bvshl a k) (c << k)`, k const < w | side: no wrap at w |
-| 0x29 | `DIV_LE p` | `(distinct b 0)` → `(bvule (bvudiv a b) a)` — **nonzero premise required** (SMT-LIB `bvudiv a 0` = all-ones) |
-| 0x2a | `DIV_BOUND p q` | `ule a c, uge b d` → `ule (bvudiv a b) (c / d)` | side: val(d) ≥ 1 |
-| 0x2b | `MOD_BOUND p q` | `ule b c, distinct b 0` → `ule (bvurem a b) (c - 1)` | side: val(c) ≥ 1 |
-| 0x2c | `ZEXT_BOUND` | → `(bvule ((_ zero_extend n) t) (_ bv(2^(w-n)-1) w))` |
-| 0x2d | `MONO_ADD_LO p q r s` | `uge a la, uge b lb, ule a ha, ule b hb` → `uge (bvadd a b) (la+lb)` | side: **ha + hb no wrap at w** (upper premises exclude wraparound; lower bounds alone are unsound) |
-| 0x2e | `MONO_MUL_LO p q r s` | analogous, side: ha*hb no wrap |
-| 0x2f | `NE_FROM_UGE p` | `uge a c` → `(distinct a 0)` | side: val(c) ≥ 1 |
-| 0x30 | `UGE_CONST c1 c2` | `(bvuge c1 c2)` | val(c1) ≥ val(c2) |
+lemma). Every rule whose conclusion mentions a compound subject takes that
+subject as a `t` param — an arena index whose node the checker inspects one
+level (tag + argument indices) to bind a/b/s/k; that is what makes
+conclusions computable without search. Bound sides marked VAL are computed
+constants carried in the internal shape:
+| id | rule | premises | params | conclusion | side condition |
+|----|------|----------|--------|-----------|----------------|
+| 0x20 | `TRANS_ULE` | `ule a b`, `ule b c` | — | `ule a c` | — |
+| 0x21 | `ULE_ULT` | `ule a c1` | `c2*` | `ult a c2` | val(c1) < val(c2) |
+| 0x22 | `AND_LE_L` | — | `t = (bvand a b)` | `(bvule t a)` | — |
+| 0x23 | `AND_LE_R` | — | `t = (bvand a b)` | `(bvule t b)` | — |
+| 0x24 | `SHR_LE` | — | `t = (bvlshr a s)` | `(bvule t a)` | — (any s) |
+| 0x25 | `SHR_BOUND` | `ule a c` | `t = (bvlshr a k)`, k CONST | `(bvule t VAL(c >> k))` | val(k) < w |
+| 0x26 | `MONO_ADD` | `ule a ca`, `ule b cb` | `t = (bvadd a b)` | `(bvule t VAL(ca+cb))` | ca+cb < 2^w |
+| 0x27 | `MONO_MUL` | `ule a ca`, `ule b cb` | `t = (bvmul a b)` | `(bvule t VAL(ca*cb))` | ca*cb < 2^w |
+| 0x28 | `MONO_SHL` | `ule a c` | `t = (bvshl a k)`, k CONST | `(bvule t VAL(c << k))` | val(k) < w ∧ c<<k < 2^w |
+| 0x29 | `DIV_LE` | `(distinct b 0)` | `t = (bvudiv a b)` | `(bvule t a)` | — (**nonzero premise required**: SMT-LIB `bvudiv a 0` = all-ones) |
+| 0x2a | `DIV_BOUND` | `ule a c`, `uge b d` | `t = (bvudiv a b)` | `(bvule t VAL(c / d))` | val(d) ≥ 1 |
+| 0x2b | `MOD_BOUND` | `ule b c`, `distinct b 0` | `t = (bvurem a b)` | `(bvule t VAL(c - 1))` | val(c) ≥ 1 |
+| 0x2c | `ZEXT_BOUND` | — | `t = ((_ zero_extend n) x)` | `(bvule t VAL(2^(w-n) - 1))` | widths: w = width(x)+n |
+| 0x2d | `MONO_ADD_LO` | `uge a la`, `uge b lb`, `ule a ha`, `ule b hb` | `t = (bvadd a b)` | `(bvuge t VAL(la+lb))` | **ha+hb < 2^w** (upper premises exclude wraparound; lower bounds alone are unsound) |
+| 0x2e | `MONO_MUL_LO` | analogous (4 premises) | `t = (bvmul a b)` | `(bvuge t VAL(la*lb))` | ha*hb < 2^w |
+| 0x2f | `NE_FROM_UGE` | `uge a c` | — | `(distinct a 0)` | val(c) ≥ 1 |
 
 Soundness contract: every rule has a machine-checked lemma
 (`fstar/Ebpf.Proof.fst`) against the formula semantics (`Ebpf.Formula.sat`)
@@ -278,21 +345,53 @@ header  { magic "KEEL", u16 version, u16 mode,      ; mode must equal loader-req
           u32 insn_cnt, u32 arena_cnt, u32 step_rec_cnt, u32 proof_step_cnt,
           u32 claim_cnt }
 arena   [ { u8 tag, u8 width, u16 aux, u32 args[arity(tag)] } ]
-          ; tags: CONST64 (2 words), CONST32 (1 word), REG, BVADD..BVNEG,
-          ;   CONCAT, EXTRACT (aux = hi<<8|lo), ZEXT/SEXT (aux = n), ITE,
-          ;   EQ, NE, ULE, ULT, UGE — fixed arity table; widths checked;
-          ;   args strictly backward; NO hash-consing in the checker:
-          ;   syntactic equality IS index equality, and it is the
-          ;   certifier's job to share nodes (unshared duplicates only
-          ;   bloat the certificate and fail to connect proofs — never
-          ;   unsound)
-claims  [ { u32 insn_idx, u32 atom_idx } ]          ; declared @assert atoms
-steps   [ per-insn: u8 kind (SPEXACT | HIT | PROVE | FORGET) + payload ]
+claims  [ { u32 insn_idx, u32 atom_idx } ]   ; attach BEFORE insn insn_idx;
+                                             ; insn_idx non-decreasing
+steps   [ per-insn records, in program order ]
 proofs  [ { u16 rule_id, u8 n_premises, u8 n_params, u32 args[] } ]
+          ; one global array; PROVE records consume from a running cursor;
+          ; cursor must land exactly at proof_step_cnt
 ```
 
-Size model: SP-exact instructions cost ~1 byte + arena nodes their
-definition terms need anyway; proofs ~10 bytes/step, 2–5 steps per
+**Normative arena tag table** (kind, arity, width rule; args strictly
+backward-referencing except CONST value words; NO hash-consing in the
+checker — index equality IS syntactic equality, node sharing is the
+certifier's job; duplicates bloat but never break soundness):
+
+| tag | name | kind | arity | width/aux rule |
+|-----|------|------|-------|----------------|
+| 0x01 | CONST | term | 0 | width ∈ {32,64}; value words in args: 1 (w=32) or 2 (w=64, lo then hi) — exempt from backward-ref check |
+| 0x10–0x1c | BVADD, BVSUB, BVMUL, BVUDIV, BVSDIV, BVUREM, BVSREM, BVAND, BVOR, BVXOR, BVSHL, BVLSHR, BVASHR | term | 2 | both args term-kind, width = node width |
+| 0x1d | BVNOT | term | 1 | arg term-kind, same width |
+| 0x1e | BVNEG | term | 1 | ditto |
+| 0x1f | CONCAT | term | 2 | width = width(arg0) + width(arg1) |
+| 0x20 | EXTRACT | term | 1 | aux = hi<<8\|lo; require lo ≤ hi < width(arg0); width = hi-lo+1 |
+| 0x21 | ZEXT | term | 1 | aux = n; width = width(arg0) + n |
+| 0x22 | SEXT | term | 1 | ditto |
+| 0x23 | ITE | term | 3 | arg0 atom-kind (any atom form; non-EQ guards are constructible but unusable by ITE_T/F), arg1/arg2 term-kind of equal width = node width |
+| 0x30–0x34 | EQ, NE, ULE, ULT, UGE | atom | 2 | width byte = 0; both args term-kind, equal width; atoms are ILLEGAL as term operands or atom operands (only ITE arg0) |
+
+There is **no REG tag**: registers exist only in the text surface; the
+certifier resolves each register mention to the arena index of its binding
+at that point. Consequently every v0 arena node is ground (all leaves are
+CONST) and totally evaluable.
+
+**Step-record encodings** (per instruction, in program order):
+```
+SPEXACT  { u8 0x01, u32 def_idx }                    ; §6.4 shape-validate + rebind
+           ; exit uses SPEXACT with def_idx = 0xffffffff (no rebind)
+OBL      { u8 0x02, u32 atom_idx, u8 how, payload }  ; §6.3, how ∈ {HIT, PROVE}
+           ; HIT:   payload = u32 claims position
+           ; PROVE: payload = u32 n_steps (consumed at the global cursor)
+CLAIM    { u8 0x03, u32 claims_idx, u8 how, payload } ; §6.1 discharge
+FORGET   { u8 0x04, u32 n, u32 positions[n] }         ; §6.5 tombstone
+```
+Every instruction contributes exactly the records the §6 pass demands, in
+pass order (CLAIMs for its point, OBLs, its SPEXACT); a record count or
+order mismatch rejects.
+
+Size model: an SP-exact instruction costs 5 bytes + the arena nodes its
+definition term needs anyway; proofs ~10 bytes/step, 2–5 steps per
 obligation on the M1 corpus. Measured in M2.4.
 
 ## 9. Frontend binding contract
