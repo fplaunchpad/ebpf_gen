@@ -39,12 +39,16 @@ let regn (n: nat) : option A.reg =
 
 let varreg (v: var) : option A.reg = regn (v + 1)
 
-(* load a 64-bit constant via a 32-bit (zero-extending) mov; None if >= 2^32 *)
+(* Load a constant via a 64-bit (sign-extending) mov. Correct for c < 2^31
+   (imm64 (i32 c) = c). Constants >= 2^31 would need either the W32
+   zero-extend trick (but ALU32 is staged in the verified checker) or
+   LD_IMM64 (absent) -> lowering fails cleanly. Documented cap; the demo
+   corpus stays well under 2^31. Staying W64-only keeps every emitted
+   instruction inside the checker-supported (Ebpf.Annot.defterm) fragment. *)
 let const_insn (dst: A.reg) (c: U64.t) : option (list A.insn) =
   let cv = U64.v c in
-  if cv < pow2 32
-  then (let sv = if cv < pow2 31 then cv else cv - pow2 32 in
-        Some [A.Mov A.W32 dst (A.OpImm (I32.int_to_t sv))])
+  if cv < pow2 31
+  then Some [A.Mov A.W64 dst (A.OpImm (I32.int_to_t cv))]
   else None
 
 (* compile expression e into register dst, using scratch registers from
