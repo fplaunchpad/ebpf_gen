@@ -247,8 +247,20 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
       round-2 verification workflow running
 - [x] differential target re-pinned to kernel 7.0 (Ubuntu 26.04 VM `kernel7`);
       M1 corpus re-run: zero divergences on 7.0.0-27 (identical to 6.8)
-- [ ] M2.1 F* metatheory: Ebpf.{Formula,Annot,Proof,CertCheck,Densify}.fst,
-      end-to-end theorem (no admits), OCaml extraction wiring
+- [~] M2.1 F* metatheory (verified, no admits; on kernel 7.0 VM w/ F* 2026.03.24):
+      - [x] Ebpf.Formula — term/atom AST + totalized SMT-LIB QF_BV evaluation
+      - [x] Ebpf.Proof — checkable rule language + machine-checked per-rule
+            soundness for a verified core (incl. the 3 review-flagged rules);
+            check_proof_sound
+      - [x] Ebpf.Annot — simulation bridge: defterm_sound proves term
+            evaluation tracks the ISA semantics (W64 core)
+      - [x] Ebpf.CertCheck — end-to-end soundness theorem: accepts ⟹ program
+            runs to Exit with R0 set (safe), for ANY certificate; non-vacuity
+            demos check
+      - [ ] strict-mode obligation integration + claim-validity reporting into
+            the CertCheck walk (proof-rule soundness already done)
+      - [ ] SDIV/SMOD, ALU32, MOVSX, byte-swap definition-term bridge lemmas
+      - [x] OCaml extraction wiring (done earlier this milestone)
 - [ ] M2.2 pipeline: parser + certifying prover + `irc`; verified checker validates;
       kernel load sanity
 - [ ] M2.3 two-frontend demo: Ebpf.Emit.fst + python binding → same certificates
