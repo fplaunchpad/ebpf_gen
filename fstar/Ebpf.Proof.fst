@@ -40,6 +40,10 @@ let mul_mono (a1: nat) (a2: nat{a1 <= a2}) (b1: nat) (b2: nat{b1 <= b2})
   FStar.Math.Lemmas.lemma_mult_le_left a1 b1 b2;
   FStar.Math.Lemmas.lemma_mult_le_right b2 a1 a2
 
+let mod_le_self (a: nat) (b: pos) : Lemma (a % b <= a) =
+  if a < b then FStar.Math.Lemmas.small_mod a b
+  else FStar.Math.Lemmas.lemma_mod_lt a b
+
 (* ------------------------------------------------------------------ *)
 (* rule language                                                       *)
 (* ------------------------------------------------------------------ *)
@@ -67,6 +71,16 @@ type rule =
   | R_MonoMul  : p:nat -> q:nat -> t:term -> rule
   | R_TransUle : p:nat -> q:nat -> rule
   | R_NeFromUge: p:nat -> rule
+  | R_EqUle    : p:nat -> rule             (* (= a b)  ==>  (bvule a b) *)
+  (* fused division rules — match the SPEC §5 ITE-wrapped defterm directly:
+     t = (ite (= s 0) 0 (bvudiv a s)). Sound without divisor facts (LE) or
+     with a divisor lower bound (BOUND, which forces the else branch). *)
+  | R_DivIteLe   : p:nat -> t:term -> rule (* prem (Ule a c);           t as above *)
+  | R_DivIteBound: p:nat -> q:nat -> t:term -> rule
+                                           (* prems (Ule a c), (Uge s d), d>=1 *)
+  | R_ModLe    : t:term -> rule            (* t = (bvurem a s)  ==>  t <= a *)
+  | R_ModBound : p:nat -> q:nat -> t:term -> rule
+                                           (* prems (Ule s c), (Ne s 0): t <= c-1 *)
 
 (* nth conclusion, total *)
 let nth (cs: list atom) (i: nat) : option atom =
@@ -137,6 +151,33 @@ let apply (cs: list atom) (r: rule) : option atom =
     (match nth cs p with
      | Some (Atom KUge a (TC cw cv)) -> if fits cw cv && cv >= 1 then Some (Atom KNe a (TC cw 0)) else None
      | _ -> None)
+  | R_EqUle p ->
+    (match nth cs p with
+     | Some (Atom KEq a b) -> Some (Atom KUle a b)
+     | _ -> None)
+  | R_DivIteLe p (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) ->
+    (match nth cs p, evalT (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) with
+     | Some (Atom KUle a' (TC cw cv)), Some (| w, _ |) ->
+       if a' = a && s2 = s && cw = w && fits cw cv
+       then Some (Atom KUle (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) (TC cw cv))
+       else None
+     | _, _ -> None)
+  | R_DivIteBound p q (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) ->
+    (match nth cs p, nth cs q, evalT (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) with
+     | Some (Atom KUle a' (TC cw cv)), Some (Atom KUge s' (TC dw dv)), Some (| w, _ |) ->
+       if a' = a && s2 = s && s' = s && cw = w && dw = w && fits cw cv && fits dw dv && dv >= 1
+       then Some (Atom KUle (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) (TC w (cv / dv)))
+       else None
+     | _, _, _ -> None)
+  | R_ModLe (TOp2 Urem a s) ->
+    (match evalT (TOp2 Urem a s) with Some _ -> Some (Atom KUle (TOp2 Urem a s) a) | None -> None)
+  | R_ModBound p q (TOp2 Urem a s) ->
+    (match nth cs p, nth cs q, evalT (TOp2 Urem a s) with
+     | Some (Atom KUle s' (TC cw cv)), Some (Atom KNe s'' (TC _ 0)), Some (| w, _ |) ->
+       if s' = s && s'' = s && cw = w && fits cw cv && cv >= 1
+       then Some (Atom KUle (TOp2 Urem a s) (TC w (cv - 1)))
+       else None
+     | _, _, _ -> None)
   | _ -> None
 
 (* ------------------------------------------------------------------ *)
@@ -161,7 +202,7 @@ let rec all_valid_snoc (cs: list atom) (c: atom)
   | [] -> ()
   | x :: t -> all_valid_snoc t c
 
-#push-options "--z3rlimit 300 --fuel 2 --ifuel 2"
+#push-options "--z3rlimit 600 --fuel 3 --ifuel 3"
 
 let apply_sound (cs: list atom) (r: rule)
   : Lemma (requires all_valid cs)
@@ -231,6 +272,43 @@ let apply_sound (cs: list atom) (r: rule)
      | _, _, _ -> ())
   | R_TransUle p q -> nth_valid cs p; nth_valid cs q
   | R_NeFromUge p -> nth_valid cs p
+  | R_EqUle p -> nth_valid cs p
+  | R_DivIteLe p (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) ->
+    nth_valid cs p;
+    (match nth cs p, evalT (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) with
+     | Some (Atom KUle a' (TC cw cv)), Some (| w, _ |) ->
+       if a' = a && s2 = s && cw = w && fits cw cv then
+         (match evalT a, evalT s with
+          | Some (| _, va |), Some (| _, vs |) -> if vs <> 0 then div_le_self va vs else ()
+          | _, _ -> ())
+       else ()
+     | _, _ -> ())
+  | R_DivIteBound p q (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) ->
+    nth_valid cs p; nth_valid cs q;
+    (match nth cs p, nth cs q, evalT (TIte (Atom KEq s (TC sw 0)) (TC zw 0) (TOp2 Udiv a s2)) with
+     | Some (Atom KUle a' (TC cw cv)), Some (Atom KUge s' (TC dw dv)), Some (| w, _ |) ->
+       if a' = a && s2 = s && s' = s && cw = w && dw = w && fits cw cv && fits dw dv && dv >= 1 then
+         (match evalT a, evalT s with
+          | Some (| _, va |), Some (| _, vs |) ->
+            div_antitone va dv vs;                        (* va/vs <= va/dv (dv <= vs) *)
+            FStar.Math.Lemmas.lemma_div_le va cv dv       (* va/dv <= cv/dv *)
+          | _, _ -> ())
+       else ()
+     | _, _, _ -> ())
+  | R_ModLe (TOp2 Urem a s) ->
+    (match evalT a, evalT s with
+     | Some (| _, va |), Some (| _, vs |) -> if vs <> 0 then mod_le_self va vs else ()
+     | _, _ -> ())
+  | R_ModBound p q (TOp2 Urem a s) ->
+    nth_valid cs p; nth_valid cs q;
+    (match nth cs p, nth cs q, evalT (TOp2 Urem a s) with
+     | Some (Atom KUle s' (TC cw cv)), Some (Atom KNe s'' (TC _ 0)), Some (| w, _ |) ->
+       if s' = s && s'' = s && cw = w && fits cw cv && cv >= 1 then
+         (match evalT a, evalT s with
+          | Some (| _, va |), Some (| _, vs |) -> if vs <> 0 then FStar.Math.Lemmas.lemma_mod_lt va vs else ()
+          | _, _ -> ())
+       else ()
+     | _, _, _ -> ())
   | _ -> ()
 
 #pop-options
