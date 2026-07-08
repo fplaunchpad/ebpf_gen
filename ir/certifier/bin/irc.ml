@@ -292,8 +292,75 @@ let selftest () =
   pr "honest proof TRANSPLANTED to add"   false (P.check_proof [] g_trans honest);
   pr "forged rule (42<=41 side cond)"     false (P.check_proof [] g_ok forged_side)
 
+(* ---------- measurement (M2.4) ---------- *)
+(* Self-contained per-claim certificate byte count: a recursive term/atom
+   encoding (tag + operands) with NO node sharing — an honest UPPER BOUND. The
+   SPEC §8 shared-arena + delta format would be smaller. Reported alongside
+   the sharing-free proof-step count (the clean metric, comparable to VEP's
+   proof-line counts) and the verified-check time (comparable to BCF's ~48µs).*)
+let rec tbytes (t: F.term) : int =
+  match t with
+  | F.TC (_, _) -> 10                                   (* tag+width+8B value *)
+  | F.TOp2 (_, a, b) -> 2 + tbytes a + tbytes b
+  | F.TOp1 (_, a) -> 2 + tbytes a
+  | F.TConcat (a, b) -> 1 + tbytes a + tbytes b
+  | F.TExtract (_, _, a) -> 3 + tbytes a
+  | F.TZext (_, a) -> 3 + tbytes a
+  | F.TSext (_, a) -> 3 + tbytes a
+  | F.TIte (c, a, b) -> 1 + abytes c + tbytes a + tbytes b
+and abytes (a: F.atom) : int = match a with F.Atom (_, x, y) -> 1 + tbytes x + tbytes y
+
+let rule_terms (r: P.rule) : F.term list =
+  match r with
+  | P.R_EvalEq t | P.R_UleRefl t | P.R_EqRefl t | P.R_AndLeL t | P.R_AndLeR t
+  | P.R_ShrLe t | P.R_ModLe t -> [t]
+  | P.R_UleConst (a, b) | P.R_UltConst (a, b) | P.R_UgeConst (a, b) | P.R_NeConst (a, b) -> [a; b]
+  | P.R_DivLe (_, t) | P.R_ShrBound (_, t) | P.R_DivIteLe (_, t) -> [t]
+  | P.R_MonoAdd (_, _, t) | P.R_MonoMul (_, _, t) | P.R_DivIteBound (_, _, t) | P.R_ModBound (_, _, t) -> [t]
+  | P.R_TransUle _ | P.R_NeFromUge _ | P.R_EqUle _ -> []
+
+let rule_prems (r: P.rule) : int =
+  match r with
+  | P.R_DivLe _ | P.R_ShrBound _ | P.R_NeFromUge _ | P.R_EqUle _ | P.R_DivIteLe _ -> 1
+  | P.R_TransUle _ | P.R_MonoAdd _ | P.R_MonoMul _ | P.R_DivIteBound _ | P.R_ModBound _ -> 2
+  | _ -> 0
+
+let step_bytes (r: P.rule) : int =
+  3 + rule_prems r + List.fold_left (fun acc t -> acc + tbytes t) 0 (rule_terms r)
+
+(* collect (goal, proof) for each certifiable claim of a program *)
+let certify_claims (prog: A.program) (claims: claim list) : (F.atom * P.rule list) list =
+  List.filter_map (fun c ->
+    match binding_at prog c.after c.reg with
+    | None -> None
+    | Some t ->
+      (try let goal = atom_of_claim t c in Some (goal, prove_claim c.kind t c.bound)
+       with Cannot_prove _ -> None)) claims
+
+let measure (file: string) : unit =
+  let ic = open_in file in
+  let text = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  let (prog, claims) = parse text in
+  let goals_proofs = certify_claims prog claims in
+  let steps = List.fold_left (fun a (_, pf) -> a + List.length pf) 0 goals_proofs in
+  let cbytes = List.fold_left (fun a (g, pf) ->
+                 a + abytes g + List.fold_left (fun b r -> b + step_bytes r) 0 pf) 16 goals_proofs in
+  (* time the VERIFIED checks: accepts + every claim's check_proof, N iters *)
+  let iters = 20000 in
+  let t0 = Unix.gettimeofday () in
+  for _ = 1 to iters do
+    ignore (CC.accepts prog);
+    List.iter (fun (g, pf) -> ignore (P.check_proof [] g pf)) goals_proofs
+  done;
+  let us = (Unix.gettimeofday () -. t0) *. 1e6 /. float_of_int iters in
+  let name = Filename.remove_extension (Filename.basename file) in
+  Printf.printf "%s\t%d\t%d\t%d\t%d\t%.2f\n"
+    name (List.length prog) (List.length goals_proofs) steps cbytes us
+
 let () =
   if Array.length Sys.argv > 1 && Sys.argv.(1) = "selftest" then (selftest (); exit 0);
+  if Array.length Sys.argv > 2 && Sys.argv.(1) = "measure" then (measure Sys.argv.(2); exit 0);
   let file = if Array.length Sys.argv > 1 then Sys.argv.(1) else "/dev/stdin" in
   let ic = open_in file in
   let n = in_channel_length ic in
