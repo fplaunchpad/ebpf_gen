@@ -290,6 +290,8 @@ Equality plumbing:
 
 ITE collapse (division definitions; **guard identity is index equality** —
 the premise's operand indices must equal the guard node's operand indices):
+| id | rule | premises | params | conclusion |
+|----|------|----------|--------|-----------|
 | 0x18 | `ITE_F` | `(distinct s c)` | `ite` = `(ite (= s c) x y)` | `(= ite y)` |
 | 0x19 | `ITE_T` | `(= s c)` | `ite` as above | `(= ite x)` |
 
