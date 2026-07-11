@@ -257,9 +257,14 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
       - [x] Ebpf.CertCheck — end-to-end soundness theorem: accepts ⟹ program
             runs to Exit with R0 set (safe), for ANY certificate; non-vacuity
             demos check
-      - [ ] strict-mode obligation integration + claim-validity reporting into
-            the CertCheck walk (proof-rule soundness already done)
+      - [x] strict-mode obligation integration + claim-validity reporting
+            (`Ebpf.CertClaim`): claim_soundness (Total: accepts ⟹ safe + all
+            @assert claims hold) and strict_soundness (Defensive: accepts ⟹
+            safe + no div/0 + no oversized shift), both for ANY certificate.
+            Composes defterm_sound + check_proof_sound + bagree. No admits.
       - [ ] SDIV/SMOD, ALU32, MOVSX, byte-swap definition-term bridge lemmas
+            (Hole A — still open; extends Ebpf.Annot.defterm/defterm_sound;
+            SDIV/SMOD needs the sign-magnitude = truncated-division equivalence)
       - [x] OCaml extraction wiring (done earlier this milestone)
 - [~] M2.2 pipeline (`ir/certifier/`, OCaml around extracted verified code):
       - [x] `.kir` parser (instructions + `@assert (cmp rN const)` claims)
