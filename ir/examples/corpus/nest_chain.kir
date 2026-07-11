@@ -1,0 +1,19 @@
+.keel 0
+.mode kernel
+.prog
+  mov64 r1, 1
+  mov64 r2, 2
+  add64 r1, r2
+  mov64 r2, 3
+  mul64 r1, r2
+  mov64 r2, 4
+  add64 r1, r2
+  mov64 r2, 5
+  mul64 r1, r2
+  mov64 r2, 6
+  add64 r1, r2
+  mov64 r2, 7
+  mul64 r1, r2
+  @assert (bvule r1 (_ bv497 64))
+  mov64 r0, r1
+  exit

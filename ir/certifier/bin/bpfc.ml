@@ -53,6 +53,25 @@ let corpus : (string * D.prog) list = [
                 assrt 0 101; D.Ret (var 0) ];
   "big",      [ letv 0 (bin D.Mul (c 50000) (c 50000));
                 D.Assert (var 0, u 2500000000); D.Ret (var 0) ];
+  (* deeply-nested "comprehensive" expressions (single Let, one assert) *)
+  (* nest_arith = ((2*3 + 4*5) * ((10-3) + 20/4)) = 26*12 = 312 *)
+  "nest_arith", [ letv 0 (bin D.Mul
+                    (bin D.Add (bin D.Mul (c 2) (c 3)) (bin D.Mul (c 4) (c 5)))
+                    (bin D.Add (bin D.Sub (c 10) (c 3)) (bin D.Div (c 20) (c 4))));
+                  assrt 0 312; D.Ret (var 0) ];
+  (* nest_chain = ((((((1+2)*3)+4)*5)+6)*7) = 497 (left-heavy) *)
+  "nest_chain", [ letv 0 (bin D.Mul (bin D.Add (bin D.Mul (bin D.Add
+                    (bin D.Mul (bin D.Add (c 1) (c 2)) (c 3)) (c 4)) (c 5)) (c 6)) (c 7));
+                  assrt 0 497; D.Ret (var 0) ];
+  (* nest_mask = ((6*7 + 8) * (100/4 - 5)) & 0xff = (50 * 20) & 255 = 1000 & 255 = 232 *)
+  "nest_mask",  [ letv 0 (bin D.And
+                    (bin D.Mul (bin D.Add (bin D.Mul (c 6) (c 7)) (c 8))
+                               (bin D.Sub (bin D.Div (c 100) (c 4)) (c 5)))
+                    (c 255));
+                  assrt 0 232; D.Ret (var 0) ];
+  (* nest_bits = ((0xf0 | 0x0f) ^ 0xaa) & 0xff = (255 ^ 170) & 255 = 85 *)
+  "nest_bits",  [ letv 0 (bin D.And (bin D.Xor (bin D.Or (c 240) (c 15)) (c 170)) (c 255));
+                  assrt 0 85; D.Ret (var 0) ];
 ]
 
 let expected (p: D.prog) : string =

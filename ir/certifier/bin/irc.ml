@@ -346,17 +346,30 @@ let measure (file: string) : unit =
   let steps = List.fold_left (fun a (_, pf) -> a + List.length pf) 0 goals_proofs in
   let cbytes = List.fold_left (fun a (g, pf) ->
                  a + abytes g + List.fold_left (fun b r -> b + step_bytes r) 0 pf) 16 goals_proofs in
-  (* time the VERIFIED checks: accepts + every claim's check_proof, N iters *)
+  (* verified-check time: accepts + every claim's check_proof, N iters *)
   let iters = 20000 in
   let t0 = Unix.gettimeofday () in
   for _ = 1 to iters do
     ignore (CC.accepts prog);
     List.iter (fun (g, pf) -> ignore (P.check_proof [] g pf)) goals_proofs
   done;
-  let us = (Unix.gettimeofday () -. t0) *. 1e6 /. float_of_int iters in
+  let chk_us = (Unix.gettimeofday () -. t0) *. 1e6 /. float_of_int iters in
+  (* end-to-end certify pipeline: parse .kir -> accepts -> synthesize proofs
+     -> check_proof -> serialize bytecode (i.e. everything from the emitted IR
+     to "verified + bytecode ready"). Fewer iters (parse dominates). *)
+  let e2e_iters = 5000 in
+  let te = Unix.gettimeofday () in
+  for _ = 1 to e2e_iters do
+    let (p2, cl2) = parse text in
+    ignore (CC.accepts p2);
+    let gp = certify_claims p2 cl2 in
+    List.iter (fun (g, pf) -> ignore (P.check_proof [] g pf)) gp;
+    ignore (S.serialize_hex p2)
+  done;
+  let e2e_us = (Unix.gettimeofday () -. te) *. 1e6 /. float_of_int e2e_iters in
   let name = Filename.remove_extension (Filename.basename file) in
-  Printf.printf "%s\t%d\t%d\t%d\t%d\t%.2f\n"
-    name (List.length prog) (List.length goals_proofs) steps cbytes us
+  Printf.printf "%s\t%d\t%d\t%d\t%d\t%.2f\t%.2f\n"
+    name (List.length prog) (List.length goals_proofs) steps cbytes chk_us e2e_us
 
 let () =
   if Array.length Sys.argv > 1 && Sys.argv.(1) = "selftest" then (selftest (); exit 0);
