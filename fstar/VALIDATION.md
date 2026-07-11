@@ -2,7 +2,12 @@
 
 Cross-check of our F* eBPF model against the Rutgers verifier-verification
 work: **Agni** (CAV 2023, `pubs/agni-cav2023.pdf` + `repos/agni`) and the
-**tnum** paper (CGO 2022, `pubs/cgo-2022.pdf`). Agni verifies the *Linux
+**tnum** paper (CGO 2022, `pubs/cgo-2022.pdf`). **NB — the local
+`pubs/cgo-2022.pdf` is corrupt/truncated** (102 400 B of ~587 KB, no `%%EOF`,
+only page 1 recoverable); the tnum facts in §6 are quoted from the authoritative
+extended version **arXiv:2105.05398v3** (page-1 abstract byte-matches the local
+file; identical technical content, adds appendices). Re-download the CGO
+camera-ready if a local full copy is wanted. Agni verifies the *Linux
 kernel's* abstract operators against concrete eBPF semantics for kernels
 4.14–5.19; its artifact has per-version SMT encodings + a Python model of the
 abstract domain (`lib_reg_bounds_tracking.py`) and the soundness checks.
@@ -125,13 +130,87 @@ entire precision-bug class** by not attempting the tracking that produced
 those CVEs — at the cost of precision, not soundness (and `tf_alu_sound`
 proves the soundness).
 
-**Precision (future):** for bitwise ops the kernel's **tnum** is strictly more
-precise than our interval (it tracks known bits). The CGO 2022 tnum paper is
-the reference if we ever add a tnum domain (its well-formed invariant is
-`v & m == 0`, concretization `{c | c & ~m == v}`); the paper also fixed an
-imprecise `tnum_mul`. Adopting tnum is a precision upgrade, orthogonal to the
-soundness validated here. (The CGO deep-dive extraction is deferred — a
-follow-up, not needed for correctness.)
+**Precision (future):** for bitwise ops the kernel's **tnum** (known-bits)
+domain is strictly more precise than our interval. Adopting tnum is a precision
+upgrade orthogonal to the soundness validated here — §6 is the full reference.
+
+## 6. Tnum domain (CGO 2022) — reference for a future bitwise-precision upgrade
+
+The CGO 2022 paper ("Sound, Precise, and Fast Abstract Interpretation with
+Tristate Numbers", Vishwanathan et al., Rutgers) is **not** a validation of our
+*current* domain — we use unsigned intervals, not tnums. It is the precise
+reference for a *future* tnum domain, which would buy bitwise (AND/OR/XOR) and
+alignment precision that intervals structurally cannot express. Facts below are
+verbatim from arXiv:2105.05398v3 (§/Eq numbers are the arXiv/CGO main-text
+numbering).
+
+**Representation + concretization (CONFIRMS the invariant we had recorded).**
+A tnum is a pair `(P.v, P.m)` (value, mask); mask bit `1` = unknown trit `µ`,
+`0` = known (Eq 3). Well-formedness is **`wellformed(P) ≜ P.v & P.m = 0`**
+(Eq 10/17) — an ill-formed tnum is `⊥`/`∅` (Eq 4). Concretization is
+**`γ(P) ≜ { c | c & ~P.m = P.v }`** (Eq 7), membership `member(x,P) ≜ x & ~P.m
+= P.v` (Eq 9). Abstraction `α(C) ≜ (α&(C), α&(C) ⊕ α|(C))` (Eq 5) is bitwise
+exact and forms a **Galois connection** with γ. So the two facts we had noted
+are confirmed verbatim, including the `~P.m` negation in γ.
+
+**Soundness / optimality obligation — mirrors ours.** An abstract op `opT` is
+*sound* iff (Eq 11/18): `wellformed(P) ∧ wellformed(Q) ∧ member(x,P) ∧
+member(y,Q) ∧ z = opC(x,y) ∧ R = opT(P,Q) ⟹ member(z,R)` — the same
+"concrete result lands in the abstract output's concretization" shape as our
+`tf_alu_sound` (and Agni Eq. 1). *Optimal* (maximally precise) is the stronger
+`R = α(f(γ(P), γ(Q)))` (the smallest sound abstraction).
+
+**What is proved optimal vs merely sound:**
+
+| tnum op | result | scope |
+|---------|--------|-------|
+| `tnum_add` | **sound AND optimal** (Thm 6) | unbounded n, hand proof |
+| `tnum_sub` | **sound AND optimal** (Lem 27) | unbounded n, hand proof |
+| `our_mul` (their new mul) | **sound only — explicitly NOT optimal** (Thm 10) | unbounded n, hand proof |
+| `&`, `\|`, shifts | sound (SMT to 64-bit); optimal per prior work [3,41] | no theorem here |
+| `kern_mul` (kernel's old mul) | soundness proved **only to 8-bit** | times out >24 h at n=16 |
+
+**The tnum_mul finding (the paper's headline).** The kernel's original
+`kern_mul` could **not** be proved sound beyond 8 bits (non-linear + unrolled
+loops make Z3 time out past n=16) — the paper does *not* claim it unsound, only
+unverifiable at scale. Their replacement **`our_mul`** uses value-mask
+decomposition (two accumulators, one final `tnum_add`), is **provably sound for
+unbounded n**, is **more precise** (fewer additions: n+1 vs 2n; strictly more
+precise on ~80% of the 8-trit cases where results differ, same result on
+99.92% of all pairs), and **~33% faster** (≈262 vs ≈393 cycles on 40M random
+64-bit pairs). **It is now merged into the Linux kernel.** Bounded verification
+also surfaced that tnum add is non-associative, add/sub are not inverses, and
+tnum mul is non-commutative — so operand order/count affects a multi-operand
+tnum result's precision.
+
+**Coverage gap to know before adopting tnum:** the paper gives explicit
+algorithms only for add/sub/mul (Listings 1–6); **`tnum_and/or/xor` and the
+shifts are only named** (verified sound by SMT, cited as already-optimal from
+Regehr–Duongsaa [42] and LLVM known-bits [3,41]). So a tnum domain would take
+those operators from the kernel / prior work, not from this paper. No
+`tnum_intersect` appears.
+
+**tnum vs interval — complementary, neither subsumes the other.** The paper
+does **not** compare tnum to intervals or describe the kernel's tnum↔bounds
+reconciliation (`reg_bounds_sync`) — do not cite it for those. What follows
+from the definitions: tnum (non-relational, per-bit) is exact for bitwise
+AND/OR/XOR and alignment/low-bit facts an interval cannot hold; intervals
+capture ordered magnitude bounds and comparisons (ADD/SUB/MUL range
+propagation) that tnum represents poorly (tnum add can blow up to all-`µ`).
+Tnum outputs are frequently **incomparable** under the tnum order, so the
+kernel keeps *both* and cross-refines — which is exactly why our single-`u64`
+domain is a sound coarsening and a tnum layer would be an additive precision
+gain, not a replacement.
+
+**Verification method (the reference method — NOT Coq):** bounded automated
+verification in **Z3, theory of fixed-size bitvectors**, VCs specialized per
+bitwidth, loops unrolled + SSA; add/sub/bitwise verified sound at 64-bit "in a
+few seconds", mul only to n=8. Unbounded soundness/optimality (add/sub/our_mul)
+comes from **hand proofs** (carry/borrow lemmas, value-mask-decomposition
+lemmas), not machine-checked. **Implication for us:** an F*-proved tnum domain
+would give *unbounded, machine-checked* soundness/optimality directly —
+strictly stronger than their bounded SMT (bitwise) and 8-bit mul result — using
+the very obligation shape (`member`/`wellformed`) above.
 
 ## Bottom line
 
