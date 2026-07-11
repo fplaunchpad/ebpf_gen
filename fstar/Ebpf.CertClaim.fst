@@ -38,6 +38,40 @@ let claim_holds (b: bnds) (rf: regfile) (r: reg) (k: U64.t) (pf: list P.rule)
   bagree_lookup b rf r                               (* ⟹ evalT t tracks rf r *)
 #pop-options
 
+(* --- strict-mode safety obligations (divisor ≠ 0, shift < width) --- *)
+(* Same mechanism as claim_holds: a validated obligation proof implies the
+   concrete runtime condition, hence the Defensive semantics does not get
+   stuck (alu_defined holds). *)
+#push-options "--fuel 2 --ifuel 2 --z3rlimit 100"
+let ne_holds (b: bnds) (rf: regfile) (r: reg) (pf: list P.rule)
+  : Lemma (requires bagree b rf /\ Some? (b r) /\
+                    P.check_proof [] (Atom KNe (Some?.v (b r)) (TC 64 0)) pf)
+          (ensures Some? (rf r) /\ U64.v (Some?.v (rf r)) <> 0) =
+  P.check_proof_sound [] (Atom KNe (Some?.v (b r)) (TC 64 0)) pf;
+  bagree_lookup b rf r
+
+let ult_holds (b: bnds) (rf: regfile) (r: reg) (c: nat) (pf: list P.rule)
+  : Lemma (requires fits 64 c /\ bagree b rf /\ Some? (b r) /\
+                    P.check_proof [] (Atom KUlt (Some?.v (b r)) (TC 64 c)) pf)
+          (ensures Some? (rf r) /\ U64.v (Some?.v (rf r)) < c) =
+  P.check_proof_sound [] (Atom KUlt (Some?.v (b r)) (TC 64 c)) pf;
+  bagree_lookup b rf r
+#pop-options
+
+(* Bridge to the Defensive semantics' definedness predicate: a divisor proved
+   nonzero / a shift amount proved < 64 makes `alu_defined` true, so
+   `stepx Defensive` on that ALU op does not get stuck. (These are the
+   content lemmas for strict-mode obligations; the full Defensive-mode walk
+   theorem is the analogue of awalk_sound below, threading these in place of
+   claim_holds — the same structure, using stepx Defensive.) *)
+let ne_defends (n: pos) (op: alu_op) (s: int{fits n s})
+  : Lemma (requires (DIV? op \/ SDIV? op \/ MOD? op \/ SMOD? op) /\ s <> 0)
+          (ensures alu_defined n op s) = ()
+
+let ult_defends (n: pos) (op: alu_op) (s: int{fits n s})
+  : Lemma (requires (LSH? op \/ RSH? op \/ ARSH? op) /\ s < n)
+          (ensures alu_defined n op s) = ()
+
 (* --- annotated program: instructions interleaved with claims --- *)
 noeq type ai =
   | IStep  : insn -> ai
