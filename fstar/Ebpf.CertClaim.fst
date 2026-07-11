@@ -145,3 +145,140 @@ let claim_soundness (p: aprog)
 let _ = assert_norm (awalk b0 [IStep (Mov W64 R0 (OpImm 0l)); IStep Exit])
 let _ = assert_norm (not (awalk b0 [IStep Exit]))
 let _ = assert_norm (not (awalk b0 [IStep (Mov W64 R0 (OpReg R3)); IStep Exit]))
+
+(* ================================================================== *)
+(* STRICT mode: run under Defensive semantics (div/0 and oversized     *)
+(* shifts are stuck), with a safety obligation proved at each register  *)
+(* div/shift and a structural check for immediate div/shift.            *)
+(* ================================================================== *)
+
+let is_reg_divshift (i: insn) : bool =
+  match i with
+  | Alu _ op _ (OpReg _) ->
+    DIV? op || SDIV? op || MOD? op || SMOD? op || LSH? op || RSH? op || ARSH? op
+  | _ -> false
+
+let imm_val (w: width) (k: FStar.Int32.t) : (s:int{fits (bits w) s}) =
+  match w with | W64 -> imm64 k | W32 -> imm32 k
+
+(* structural definedness for an immediate div/shift (imm-0 divisor and
+   imm shift >= width are rejected; = the alu_defined condition on the imm) *)
+let imm_ok (i: insn) : bool =
+  match i with
+  | Alu w op _ (OpImm k) -> alu_defined (bits w) op (imm_val w k)
+  | _ -> true
+
+(* obligation atom for a register div/shift (over the src binding) *)
+let obl_atom (b: bnds) (i: insn) : option atom =
+  match i with
+  | Alu W64 op _ (OpReg src) ->
+    (match b src with
+     | Some t ->
+       if DIV? op || SDIV? op || MOD? op || SMOD? op then Some (Atom KNe t (TC 64 0))
+       else if LSH? op || RSH? op || ARSH? op then Some (Atom KUlt t (TC 64 64))
+       else None
+     | None -> None)
+  | _ -> None
+
+(* when the ALU operand is defined, the Defensive step equals the Total step *)
+#push-options "--fuel 2 --ifuel 2 --z3rlimit 150"
+let defensive_step (rf: regfile) (i: insn)
+  : Lemma (requires Some? (step rf i) /\
+                    (match i with
+                     | Alu w op _ src ->
+                       (match opbits rf w src with Some s -> alu_defined (bits w) op s | None -> True)
+                     | _ -> True))
+          (ensures stepx Defensive rf i == step rf i) = ()
+
+(* SStep (non-reg-div/shift, imm_ok) ⟹ its ALU operand is defined *)
+let sstep_defined (rf: regfile) (i: insn)
+  : Lemma (requires (not (is_reg_divshift i)) /\ imm_ok i /\ Some? (step rf i))
+          (ensures (match i with
+                    | Alu w op _ src ->
+                      (match opbits rf w src with Some s -> alu_defined (bits w) op s | None -> True)
+                    | _ -> True)) =
+  match i with
+  | Alu w op dst (OpImm k) -> ()          (* opbits = imm_val; imm_ok = alu_defined *)
+  | Alu w op dst (OpReg src) -> ()        (* not reg-div/shift ⟹ op is +,-,*,&,|,^ ⟹ defined *)
+  | _ -> ()
+
+(* SObl (reg div/shift with a validated obligation) ⟹ its operand is defined *)
+let sobl_defined (b: bnds) (rf: regfile) (i: insn) (pf: list P.rule)
+  : Lemma (requires bagree b rf /\ is_reg_divshift i /\ Some? (obl_atom b i) /\
+                    P.check_proof [] (Some?.v (obl_atom b i)) pf /\ Some? (step rf i))
+          (ensures (match i with
+                    | Alu w op _ src ->
+                      (match opbits rf w src with Some s -> alu_defined (bits w) op s | None -> True)
+                    | _ -> True)) =
+  match i with
+  | Alu W64 op dst (OpReg src) ->
+    if DIV? op || SDIV? op || MOD? op || SMOD? op
+    then ne_holds b rf src pf
+    else ult_holds b rf src 64 pf
+  | _ -> ()
+#pop-options
+
+noeq type si = | SStep : insn -> si | SObl : insn -> list P.rule -> si
+let sprog = list si
+
+(* Defensive run; SStep/SObl both step under Defensive semantics *)
+let rec srun (rf: regfile) (p: sprog) : Tot (option regfile) (decreases p) =
+  match p with
+  | [] -> None
+  | SStep Exit :: _ -> (match rf R0 with Some _ -> Some rf | None -> None)
+  | SStep i :: rest | SObl i _ :: rest ->
+    (match stepx Defensive rf i with Some rf' -> srun rf' rest | None -> None)
+
+let rec swalk (b: bnds) (p: sprog) : Tot bool (decreases p) =
+  match p with
+  | [] -> false
+  | SStep Exit :: _ -> Some? (b R0)
+  | SStep i :: rest ->
+    (not (is_reg_divshift i)) && imm_ok i &&
+    (match wdst i, defterm b i with
+     | Some dst, Some t -> swalk (upd b dst t) rest
+     | _, _ -> false)
+  | SObl i pf :: rest ->
+    is_reg_divshift i &&
+    (match obl_atom b i with
+     | Some ob -> P.check_proof [] ob pf &&
+                  (match wdst i, defterm b i with
+                   | Some dst, Some t -> swalk (upd b dst t) rest
+                   | _, _ -> false)
+     | None -> false)
+
+#push-options "--fuel 2 --ifuel 2 --z3rlimit 300"
+let rec swalk_sound (b: bnds) (rf: regfile) (p: sprog)
+  : Lemma (requires bagree b rf /\ swalk b p)
+          (ensures Some? (srun rf p))
+          (decreases p) =
+  match p with
+  | SStep Exit :: _ -> bagree_lookup b rf R0
+  | SStep i :: rest ->
+    (match wdst i, defterm b i with
+     | Some dst, Some t ->
+       defterm_sound b rf i;
+       (match step rf i with
+        | Some rf' -> sstep_defined rf i; defensive_step rf i; swalk_sound (upd b dst t) rf' rest
+        | None -> ())
+     | _, _ -> ())
+  | SObl i pf :: rest ->
+    (match obl_atom b i with
+     | Some ob ->
+       (match wdst i, defterm b i with
+        | Some dst, Some t ->
+          defterm_sound b rf i;
+          (match step rf i with
+           | Some rf' -> sobl_defined b rf i pf; defensive_step rf i; swalk_sound (upd b dst t) rf' rest
+           | None -> ())
+        | _, _ -> ())
+     | None -> ())
+#pop-options
+
+(* End-to-end (strict/Defensive): an accepted strict certificate runs safely
+   under the Defensive semantics — no div-by-0, no oversized shift, every
+   obligation discharged — reaching Exit with R0 set, for ANY certificate. *)
+let strict_soundness (p: sprog)
+  : Lemma (requires swalk b0 p) (ensures Some? (srun rf0 p)) =
+  bagree_b0 ();
+  swalk_sound b0 rf0 p
