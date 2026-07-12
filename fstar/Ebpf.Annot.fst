@@ -10,12 +10,15 @@
    real machine exactly.
 
    v0-core coverage: 64-bit MOV/NEG and the ALU ops
-   ADD/SUB/MUL/AND/OR/XOR/DIV/MOD/LSH/RSH/ARSH (register and immediate
-   forms). Staged (definition terms defined in SPEC §5, bridge lemma
-   deferred): SDIV/SMOD (needs the sign-magnitude = truncated-division
-   equivalence), all ALU32 (needs the zero-extend wrapper layer), MOVSX and
-   byte swaps. These return None from `defterm` here so the checker treats
-   them as unsupported in v0-core rather than trusting an unproven shape. *)
+   ADD/SUB/MUL/AND/OR/XOR/DIV/SDIV/MOD/SMOD/LSH/RSH/ARSH (register and
+   immediate forms). SDIV/SMOD use the sign-magnitude = truncated-division
+   equivalence (`sdiv_equiv`/`srem_equiv` below) to match M1's `alu_sem`;
+   their §5 shapes are the SMT-LIB `bvsdiv`/`bvsrem` (RFC 9669 makes them
+   truncated toward zero, `SDIV INT64_MIN -1 = INT64_MIN`, `SMOD _ 0 = _`).
+   Staged (definition terms defined in SPEC §5, bridge lemma deferred): all
+   ALU32 (needs the zero-extend wrapper layer), MOVSX and byte swaps. These
+   return None from `defterm` here so the checker treats them as unsupported
+   in v0-core rather than trusting an unproven shape. *)
 module Ebpf.Annot
 
 open FStar.Mul
@@ -91,7 +94,8 @@ let defterm (b: bnds) (i: insn) : option term =
         | LSH -> Some (TOp2 Shl  a (TOp2 And s (TC 64 63)))
         | RSH -> Some (TOp2 Lshr a (TOp2 And s (TC 64 63)))
         | ARSH-> Some (TOp2 Ashr a (TOp2 And s (TC 64 63)))
-        | _   -> None)                     (* SDIV/SMOD staged *)
+        | SDIV-> Some (TIte (Atom KEq s (TC 64 0)) (TC 64 0) (TOp2 Sdiv a s))
+        | SMOD-> Some (TOp2 Srem a s))
      | _, _ -> None)
   | _ -> None                              (* W32 / MovSX / Swap / Assert / Exit staged *)
 
@@ -130,6 +134,57 @@ let opterm_sound (b: bnds) (rf: regfile) (src: operand)
 
 let res64v (x: int{fits 64 x}) : Lemma (U64.v (res64 W64 x) == x) = ()
 
+(* ---- SDIV/SMOD bridge: SMT-LIB bvsdiv/bvsrem = eBPF truncated division ----
+   The §5 definition terms use SMT-LIB's sign-magnitude bvsdiv/bvsrem
+   (Formula.eval_sdiv/eval_srem); M1's alu_sem uses truncated-toward-zero
+   division on the signed interpretations (Ebpf.Int.trunc_div/trunc_mod).
+   These are equal at every width. Proved once, consumed by defterm_sound. *)
+
+#push-options "--fuel 2 --ifuel 1 --z3rlimit 100"
+(* two's-complement negation equals pow2 w - x on (0, pow2 w); self-inverse *)
+let negp_pos (w: pos) (x: int{fits w x})
+  : Lemma (requires x <> 0) (ensures negp w x == pow2 w - x) =
+  FStar.Math.Lemmas.lemma_mod_plus (0 - x) 1 (pow2 w);
+  FStar.Math.Lemmas.modulo_lemma (pow2 w - x) (pow2 w)
+
+let negp_negp (w: pos) (x: int{fits w x}) : Lemma (negp w (negp w x) == x) =
+  if x = 0 then () else (negp_pos w x; negp_pos w (negp w x))
+
+(* a width-w pattern divided by a positive value stays in range (wrap = id) *)
+let quot_wrap (w: pos) (x: int{fits w x}) (y: int{y >= 1})
+  : Lemma (wrap w (x / y) == x / y) =
+  FStar.Math.Lemmas.nat_over_pos_is_nat x y;
+  FStar.Math.Lemmas.lemma_div_mod x y;
+  FStar.Math.Lemmas.lemma_mod_lt x y;
+  FStar.Math.Lemmas.modulo_lemma (x / y) (pow2 w)
+#pop-options
+
+#push-options "--fuel 2 --ifuel 2 --z3rlimit 400"
+let sdiv_equiv (w: pos) (a: int{fits w a}) (b: int{fits w b})
+  : Lemma (requires b <> 0)
+          (ensures eval_sdiv w a b == wrap w (trunc_div (sval w a) (sval w b))) =
+  negp_pos w b;
+  (if msb w a then negp_pos w a else ());
+  if not (msb w a) && not (msb w b) then quot_wrap w a b
+  else if msb w a && msb w b then quot_wrap w (negp w a) (negp w b)
+  else ()                            (* diff sign: eval_sdiv = negp (q) = wrap(-q) *)
+
+let srem_equiv (w: pos) (a: int{fits w a}) (b: int{fits w b})
+  : Lemma (ensures eval_srem w a b ==
+                   (if b = 0 then a
+                    else wrap w (trunc_mod (sval w a) (sval w b)))) =
+  (if msb w a then negp_pos w a else ());
+  (if b <> 0 && msb w b then negp_pos w b else ());
+  if b = 0 then (if msb w a then negp_negp w a else ())
+  else begin
+    let da = if msb w a then negp w a else a in
+    let db = if msb w b then negp w b else b in
+    FStar.Math.Lemmas.lemma_div_mod da db;
+    FStar.Math.Lemmas.lemma_mod_lt da db;
+    FStar.Math.Lemmas.modulo_lemma (da % db) (pow2 w)
+  end
+#pop-options
+
 #push-options "--z3rlimit 600 --fuel 4 --ifuel 2"
 
 let defterm_sound (b: bnds) (rf: regfile) (i: insn)
@@ -160,6 +215,8 @@ let defterm_sound (b: bnds) (rf: regfile) (i: insn)
        res64v (alu_sem W64 op (regbits W64 dv) v);
        (match op with
         | LSH | RSH | ARSH -> mask63 v
+        | SDIV -> if v <> 0 then sdiv_equiv 64 (regbits W64 dv) v else ()
+        | SMOD -> srem_equiv 64 (regbits W64 dv) v
         | _ -> ());
        bagree_update b rf dst (Some?.v (defterm b i)) rv
      | _, _, _, _ -> ())
