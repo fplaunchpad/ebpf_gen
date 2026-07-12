@@ -17,11 +17,16 @@
    truncated toward zero, `SDIV INT64_MIN -1 = INT64_MIN`, `SMOD _ 0 = _`).
    MOVSX (sign-extend the low 8/16/32 bits) is supported via the §5
    sign_extend/extract terms and `defterm_sound_movsx`; (W32,SX32) has no §5
-   row (movsx32 is ALU64-only) so it stays unsupported. Staged (definition
-   terms defined in SPEC §5, bridge lemma deferred): all ALU32 (the zero-extend
-   wrapper layer) and byte swaps. These return None from `defterm` here so the
-   checker treats them as unsupported in v0-core rather than trusting an
-   unproven shape. *)
+   row (movsx32 is ALU64-only) so it stays unsupported. ALU32 (mov32/neg32 and
+   all W32 ALU ops) is supported via the §5 OP32 template `(_ zero_extend 32)
+   (op-at-32 A32 S32)` and `defterm_sound_{mov32,neg32,alu32}`; strict mode
+   covers W32 non-div/shift and W32 *immediate* div/shift, but W32 *register*
+   div/shift is strict-excluded (the obligation atom is W64-only in
+   Ebpf.CertClaim) — Total/claim mode still covers it, and the exclusion is a
+   completeness gap, never a soundness one. Staged (definition terms in SPEC
+   §5, bridge lemma deferred): byte swaps. These return None from `defterm`
+   here so the checker treats them as unsupported in v0-core rather than
+   trusting an unproven shape. *)
 module Ebpf.Annot
 
 open FStar.Mul
@@ -100,6 +105,37 @@ let defterm (b: bnds) (i: insn) : option term =
         | SDIV-> Some (TIte (Atom KEq s (TC 64 0)) (TC 64 0) (TOp2 Sdiv a s))
         | SMOD-> Some (TOp2 Srem a s))
      | _, _ -> None)
+  (* ALU32: §5 OP32 template — compute at width 32 on the low halves, then
+     zero-extend to 64.  A32 = (extract 31 0 A), S32 = (extract 31 0 S);
+     div32/sdiv32 keep the width-32 ITE, shifts mask with (_ bv31 32). *)
+  | Mov W32 dst src ->
+    (match opterm b src with
+     | Some s -> Some (TZext 32 (TExtract 31 0 s))
+     | None -> None)
+  | Ebpf.Ast.Neg W32 dst ->
+    (match b dst with
+     | Some a -> Some (TZext 32 (TOp1 Ebpf.Formula.Neg (TExtract 31 0 a)))
+     | None -> None)
+  | Alu W32 op dst src ->
+    (match b dst, opterm b src with
+     | Some a, Some s ->
+       let a32 = TExtract 31 0 a in
+       let s32 = TExtract 31 0 s in
+       (match op with
+        | ADD -> Some (TZext 32 (TOp2 Add a32 s32))
+        | SUB -> Some (TZext 32 (TOp2 Sub a32 s32))
+        | MUL -> Some (TZext 32 (TOp2 Mul a32 s32))
+        | AND -> Some (TZext 32 (TOp2 And a32 s32))
+        | OR  -> Some (TZext 32 (TOp2 Or  a32 s32))
+        | XOR -> Some (TZext 32 (TOp2 Xor a32 s32))
+        | DIV -> Some (TZext 32 (TIte (Atom KEq s32 (TC 32 0)) (TC 32 0) (TOp2 Udiv a32 s32)))
+        | SDIV-> Some (TZext 32 (TIte (Atom KEq s32 (TC 32 0)) (TC 32 0) (TOp2 Sdiv a32 s32)))
+        | MOD -> Some (TZext 32 (TOp2 Urem a32 s32))
+        | SMOD-> Some (TZext 32 (TOp2 Srem a32 s32))
+        | LSH -> Some (TZext 32 (TOp2 Shl  a32 (TOp2 And s32 (TC 32 31))))
+        | RSH -> Some (TZext 32 (TOp2 Lshr a32 (TOp2 And s32 (TC 32 31))))
+        | ARSH-> Some (TZext 32 (TOp2 Ashr a32 (TOp2 And s32 (TC 32 31)))))
+     | _, _ -> None)
   | MovSX w sz dst src ->
     (* §5: movsx{f}_64 = (sign_extend (64-f)) (extract (f-1) 0 S);
        movsx{f}_32 = (zero_extend 32) ((sign_extend (32-f)) (extract (f-1) 0 S)).
@@ -118,7 +154,7 @@ let defterm (b: bnds) (i: insn) : option term =
 (* the destination register an instruction writes, when defterm supports it *)
 let wdst (i: insn) : option reg =
   match i with
-  | Mov W64 dst _ | Ebpf.Ast.Neg W64 dst | Alu W64 _ dst _ -> Some dst
+  | Mov _ dst _ | Ebpf.Ast.Neg _ dst | Alu _ _ dst _ -> Some dst
   | MovSX _ _ dst _ -> Some dst
   | _ -> None
 
@@ -215,6 +251,22 @@ let eval_extract_low (t: term) (w: pos) (x: int{fits w x}) (f: pos{f <= w})
 let low_low (x: int) (f: pos) (n: pos{f <= n})
   : Lemma (low f (low n x) == low f x) =
   FStar.Math.Lemmas.pow2_modulo_modulo_lemma_1 x f n
+
+(* the low 32 bits of the 64-bit operand value are the 32-bit operand value
+   (regbits W32 = low 32; imm32 = low 32 of the sign-extended imm64) *)
+let opbits_low32 (rf: regfile) (src: operand)
+  : Lemma (requires Some? (opbits rf W64 src))
+          (ensures Some? (opbits rf W32 src) /\
+                   low 32 (Some?.v (opbits rf W64 src)) == Some?.v (opbits rf W32 src)) =
+  match src with
+  | OpReg r -> ()
+  | OpImm i -> low_low (FStar.Int32.v i) 32 64
+
+(* ALU32 shifts mask the amount with (_ bv31 32); connect to M1's `s % 32` *)
+let mask31 (sv: int{fits 32 sv}) : Lemma (UInt.logand #32 sv 31 == sv % 32) =
+  assert_norm (pow2 5 - 1 == 31);
+  assert_norm (pow2 5 == 32);
+  FStar.UInt.logand_mask #32 sv 5
 #pop-options
 
 (* ---- MOVSX bridge (delegated; isolated VC) ------------------------------ *)
@@ -239,6 +291,69 @@ let defterm_sound_movsx (b: bnds) (rf: regfile) (w: width) (sz: movsx_sz) (dst s
      res64v w (sext f (bits w) (regbits w sv));
      bagree_update b rf dst (Some?.v (defterm b (MovSX w sz dst src))) rv
    | _, _ -> ())
+#pop-options
+
+(* ---- ALU32 bridge (delegated): §5 OP32 zero-extend template -------------
+   Each W32 op computes at width 32 on the low halves of its operands and
+   zero-extends to 64 (res64 W32).  Reuses eval_extract_low (the low-half
+   extracts), opbits_low32 (src value = low 32 of the 64-bit value), mask31
+   (shift masking), and the WIDTH-GENERIC sdiv_equiv/srem_equiv at width 32. *)
+#push-options "--fuel 4 --ifuel 2 --z3rlimit 600"
+let defterm_sound_mov32 (b: bnds) (rf: regfile) (dst: reg) (src: operand)
+  : Lemma (requires bagree b rf /\ Some? (defterm b (Mov W32 dst src)))
+          (ensures (match wdst (Mov W32 dst src), defterm b (Mov W32 dst src),
+                           step rf (Mov W32 dst src) with
+                    | Some d, Some t, Some rf' -> bagree (upd b d t) rf'
+                    | _, _, _ -> False)) =
+  opterm_sound b rf src;
+  opbits_low32 rf src;
+  (match opterm b src, opbits rf W64 src with
+   | Some s, Some v ->
+     eval_extract_low s 64 v 32;
+     let rv = res64 W32 (low 32 v) in
+     res64v W32 (low 32 v);
+     bagree_update b rf dst (Some?.v (defterm b (Mov W32 dst src))) rv
+   | _, _ -> ())
+
+let defterm_sound_neg32 (b: bnds) (rf: regfile) (dst: reg)
+  : Lemma (requires bagree b rf /\ Some? (defterm b (Ebpf.Ast.Neg W32 dst)))
+          (ensures (match wdst (Ebpf.Ast.Neg W32 dst), defterm b (Ebpf.Ast.Neg W32 dst),
+                           step rf (Ebpf.Ast.Neg W32 dst) with
+                    | Some d, Some t, Some rf' -> bagree (upd b d t) rf'
+                    | _, _, _ -> False)) =
+  bagree_lookup b rf dst;
+  (match b dst, rf dst with
+   | Some a, Some dv ->
+     eval_extract_low a 64 (U64.v dv) 32;
+     let rv = res64 W32 (wrap 32 (0 - regbits W32 dv)) in
+     res64v W32 (wrap 32 (0 - regbits W32 dv));
+     bagree_update b rf dst (Some?.v (defterm b (Ebpf.Ast.Neg W32 dst))) rv
+   | _, _ -> ())
+
+let defterm_sound_alu32 (b: bnds) (rf: regfile) (op: alu_op) (dst: reg) (src: operand)
+  : Lemma (requires bagree b rf /\ Some? (defterm b (Alu W32 op dst src)))
+          (ensures (match wdst (Alu W32 op dst src), defterm b (Alu W32 op dst src),
+                           step rf (Alu W32 op dst src) with
+                    | Some d, Some t, Some rf' -> bagree (upd b d t) rf'
+                    | _, _, _ -> False)) =
+  bagree_lookup b rf dst;
+  opterm_sound b rf src;
+  opbits_low32 rf src;
+  (match b dst, rf dst, opterm b src, opbits rf W64 src with
+   | Some a, Some dv, Some s, Some v ->
+     let da32 = regbits W32 dv in
+     let v32 = low 32 v in
+     eval_extract_low a 64 (U64.v dv) 32;
+     eval_extract_low s 64 v 32;
+     (match op with
+      | LSH | RSH | ARSH -> mask31 v32
+      | SDIV -> if v32 <> 0 then sdiv_equiv 32 da32 v32 else ()
+      | SMOD -> srem_equiv 32 da32 v32
+      | _ -> ());
+     let rv = res64 W32 (alu_sem W32 op da32 v32) in
+     res64v W32 (alu_sem W32 op da32 v32);
+     bagree_update b rf dst (Some?.v (defterm b (Alu W32 op dst src))) rv
+   | _, _, _, _ -> ())
 #pop-options
 
 #push-options "--z3rlimit 600 --fuel 4 --ifuel 2"
@@ -276,6 +391,9 @@ let defterm_sound (b: bnds) (rf: regfile) (i: insn)
         | _ -> ());
        bagree_update b rf dst (Some?.v (defterm b i)) rv
      | _, _, _, _ -> ())
+  | Mov W32 dst src -> defterm_sound_mov32 b rf dst src
+  | Ebpf.Ast.Neg W32 dst -> defterm_sound_neg32 b rf dst
+  | Alu W32 op dst src -> defterm_sound_alu32 b rf op dst src
   | MovSX w sz dst src -> defterm_sound_movsx b rf w sz dst src
   | _ -> ()
 

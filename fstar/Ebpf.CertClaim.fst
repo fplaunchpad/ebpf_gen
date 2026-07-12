@@ -146,6 +146,15 @@ let _ = assert_norm (awalk b0 [IStep (Mov W64 R0 (OpImm 0l)); IStep Exit])
 let _ = assert_norm (not (awalk b0 [IStep Exit]))
 let _ = assert_norm (not (awalk b0 [IStep (Mov W64 R0 (OpReg R3)); IStep Exit]))
 
+(* M2.1 hole A: the newly-bridged families walk non-vacuously (defterm Some) *)
+let _ = assert_norm (awalk b0 [IStep (Mov W64 R0 (OpImm 5l));
+                               IStep (Alu W32 ADD R0 (OpImm 3l)); IStep Exit])
+let _ = assert_norm (awalk b0 [IStep (Mov W64 R0 (OpImm 9l));
+                               IStep (Alu W64 SDIV R0 (OpImm 2l)); IStep Exit])
+let _ = assert_norm (awalk b0 [IStep (Mov W64 R1 (OpImm 200l));
+                               IStep (MovSX W64 SX8 R0 R1); IStep Exit])
+let _ = assert_norm (awalk b0 [IStep (Mov W32 R0 (OpImm 7l)); IStep Exit])
+
 (* ================================================================== *)
 (* STRICT mode: run under Defensive semantics (div/0 and oversized     *)
 (* shifts are stuck), with a safety obligation proved at each register  *)
