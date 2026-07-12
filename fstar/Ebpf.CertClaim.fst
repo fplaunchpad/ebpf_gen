@@ -154,6 +154,8 @@ let _ = assert_norm (awalk b0 [IStep (Mov W64 R0 (OpImm 9l));
 let _ = assert_norm (awalk b0 [IStep (Mov W64 R1 (OpImm 200l));
                                IStep (MovSX W64 SX8 R0 R1); IStep Exit])
 let _ = assert_norm (awalk b0 [IStep (Mov W32 R0 (OpImm 7l)); IStep Exit])
+let _ = assert_norm (awalk b0 [IStep (Mov W64 R0 (OpImm 66l));
+                               IStep (Swap Bswap SW64 R0); IStep Exit])
 
 (* ================================================================== *)
 (* STRICT mode: run under Defensive semantics (div/0 and oversized     *)

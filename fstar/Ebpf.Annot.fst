@@ -23,10 +23,12 @@
    covers W32 non-div/shift and W32 *immediate* div/shift, but W32 *register*
    div/shift is strict-excluded (the obligation atom is W64-only in
    Ebpf.CertClaim) — Total/claim mode still covers it, and the exclusion is a
-   completeness gap, never a soundness one. Staged (definition terms in SPEC
-   §5, bridge lemma deferred): byte swaps. These return None from `defterm`
-   here so the checker treats them as unsupported in v0-core rather than
-   trusting an unproven shape. *)
+   completeness gap, never a soundness one. Byte swaps (le/be/bswap {16,32,64})
+   are supported via the §5 zero_extend/concat-of-byte-extracts term and
+   `defterm_sound_swap` (byte reversal proved = `swap_bytes` by one induction,
+   `eval_bswap_from`); no strict obligation, like MOVSX. With this the whole
+   straight-line write-a-register ALU fragment is bridged; only `Assert_`
+   (a claim, checked separately) and `Exit` (no dst) fall through to None. *)
 module Ebpf.Annot
 
 open FStar.Mul
@@ -81,6 +83,14 @@ unfold let opterm (b: bnds) (o: operand) : option term =
   match o with
   | OpImm i -> Some (TC 64 (imm64 i))
   | OpReg r -> b r
+
+(* byte-reversal term (SPEC §5 be/bswap): concat of the nb byte-extracts
+   (extract (off+7) off A) for the bytes at off, off+8, ..., MSB-first so the
+   low byte lands highest — exactly `swap_bytes`. off-indexed so the eval proof
+   is a single induction on nb. *)
+let rec bswap_from (nb: pos) (off: nat) (a: term) : Tot term (decreases nb) =
+  if nb = 1 then TExtract (off + 7) off a
+  else TConcat (TExtract (off + 7) off a) (bswap_from (nb - 1) (off + 8) a)
 
 (* the §5 definition term for the W64 core; None where staged/unsupported *)
 let defterm (b: bnds) (i: insn) : option term =
@@ -149,13 +159,27 @@ let defterm (b: bnds) (i: insn) : option term =
                  then Some (TZext 32 (TSext (32 - f) (TExtract (f - 1) 0 s)))
                  else None)
      | None -> None)
-  | _ -> None                              (* W32 ALU / Swap / Assert / Exit staged *)
+  (* byte swaps: le{N} = zero_extend of the low N bits (LE-host truncate);
+     be/bswap{N} = zero_extend of the byte-reversal.  N in {16,32,64}. *)
+  | Swap k sz dst ->
+    (match b dst with
+     | Some a ->
+       (match k, sz with
+        | ToLE, SW16 -> Some (TZext 48 (TExtract 15 0 a))
+        | ToLE, SW32 -> Some (TZext 32 (TExtract 31 0 a))
+        | ToLE, SW64 -> Some (TZext 0  (TExtract 63 0 a))
+        | _,    SW16 -> Some (TZext 48 (bswap_from 2 0 a))
+        | _,    SW32 -> Some (TZext 32 (bswap_from 4 0 a))
+        | _,    SW64 -> Some (TZext 0  (bswap_from 8 0 a)))
+     | None -> None)
+  | _ -> None                              (* Assert / Exit staged *)
 
 (* the destination register an instruction writes, when defterm supports it *)
 let wdst (i: insn) : option reg =
   match i with
   | Mov _ dst _ | Ebpf.Ast.Neg _ dst | Alu _ _ dst _ -> Some dst
   | MovSX _ _ dst _ -> Some dst
+  | Swap _ _ dst -> Some dst
   | _ -> None
 
 (* ------------------------------------------------------------------ *)
@@ -356,6 +380,72 @@ let defterm_sound_alu32 (b: bnds) (rf: regfile) (op: alu_op) (dst: reg) (src: op
    | _, _, _, _ -> ())
 #pop-options
 
+(* ---- byteswap bridge: the concat-of-byte-extracts = swap_bytes ---------- *)
+#push-options "--fuel 2 --ifuel 1 --z3rlimit 200"
+(* swap_bytes produces an nb-byte value (needed to drop bswap's wrap) *)
+let rec swap_bytes_fits (nb: nat) (x: int)
+  : Lemma (ensures 0 <= swap_bytes nb x /\ swap_bytes nb x < pow2 (8 * nb)) (decreases nb) =
+  if nb = 0 then ()
+  else begin
+    swap_bytes_fits (nb - 1) (x / 256);
+    FStar.Math.Lemmas.lemma_mod_lt x 256;
+    assert_norm (pow2 8 == 256);
+    FStar.Math.Lemmas.pow2_plus 8 (8 * (nb - 1))
+  end
+
+(* the byte at offset off is (v / pow2 off) % 256 *)
+let eval_extract_byte (t: term) (v: int{fits 64 v}) (off: nat{off + 8 <= 64})
+  : Lemma (requires evalT t == Some (mkres 64 v))
+          (ensures evalT (TExtract (off + 7) off t) == Some (mkres 8 ((v / pow2 off) % 256))) =
+  assert_norm (pow2 8 == 256)
+#pop-options
+
+(* the byte-reversal term reverses the nb bytes of (v / pow2 off).  One
+   induction on nb; the step uses v/pow2(off+8) = (v/pow2 off)/256. *)
+#push-options "--fuel 2 --ifuel 1 --z3rlimit 400"
+let rec eval_bswap_from (nb: pos) (off: nat) (a: term) (v: int{fits 64 v})
+  : Lemma (requires evalT a == Some (mkres 64 v) /\ off + 8 * nb <= 64)
+          (ensures evalT (bswap_from nb off a) == Some (mkres (8 * nb) (bswap nb (v / pow2 off))))
+          (decreases nb) =
+  assert_norm (pow2 0 == 1);
+  assert_norm (pow2 8 == 256);
+  swap_bytes_fits nb (v / pow2 off);
+  eval_extract_byte a v off;
+  if nb = 1 then ()
+  else begin
+    eval_bswap_from (nb - 1) (off + 8) a v;
+    swap_bytes_fits (nb - 1) (v / pow2 (off + 8));
+    FStar.Math.Lemmas.pow2_plus off 8;
+    FStar.Math.Lemmas.division_multiplication_lemma v (pow2 off) (pow2 8);
+    FStar.Math.Lemmas.pow2_plus 8 (8 * (nb - 1))
+  end
+#pop-options
+
+(* ---- byteswap bridge (delegated) ---------------------------------------- *)
+#push-options "--fuel 4 --ifuel 2 --z3rlimit 600"
+let defterm_sound_swap (b: bnds) (rf: regfile) (k: swap_kind) (sz: swap_sz) (dst: reg)
+  : Lemma (requires bagree b rf /\ Some? (defterm b (Swap k sz dst)))
+          (ensures (match wdst (Swap k sz dst), defterm b (Swap k sz dst),
+                           step rf (Swap k sz dst) with
+                    | Some d, Some t, Some rf' -> bagree (upd b d t) rf'
+                    | _, _, _ -> False)) =
+  bagree_lookup b rf dst;
+  assert_norm (pow2 0 == 1);
+  (match b dst, rf dst with
+   | Some a, Some dv ->
+     FStar.Math.Lemmas.pow2_le_compat 64 (swap_bits sz);
+     let rv = to_u64 (swap_sem k sz (U64.v dv)) in
+     let t = Some?.v (defterm b (Swap k sz dst)) in
+     (match k, sz with
+      | ToLE, SW16 -> eval_extract_low a 64 (U64.v dv) 16; bagree_update b rf dst t rv
+      | ToLE, SW32 -> eval_extract_low a 64 (U64.v dv) 32; bagree_update b rf dst t rv
+      | ToLE, SW64 -> eval_extract_low a 64 (U64.v dv) 64; bagree_update b rf dst t rv
+      | _,    SW16 -> eval_bswap_from 2 0 a (U64.v dv);     bagree_update b rf dst t rv
+      | _,    SW32 -> eval_bswap_from 4 0 a (U64.v dv);     bagree_update b rf dst t rv
+      | _,    SW64 -> eval_bswap_from 8 0 a (U64.v dv);     bagree_update b rf dst t rv)
+   | _, _ -> ())
+#pop-options
+
 #push-options "--z3rlimit 600 --fuel 4 --ifuel 2"
 
 let defterm_sound (b: bnds) (rf: regfile) (i: insn)
@@ -395,6 +485,7 @@ let defterm_sound (b: bnds) (rf: regfile) (i: insn)
   | Ebpf.Ast.Neg W32 dst -> defterm_sound_neg32 b rf dst
   | Alu W32 op dst src -> defterm_sound_alu32 b rf op dst src
   | MovSX w sz dst src -> defterm_sound_movsx b rf w sz dst src
+  | Swap k sz dst -> defterm_sound_swap b rf k sz dst
   | _ -> ()
 
 #pop-options

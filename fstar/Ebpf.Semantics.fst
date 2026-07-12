@@ -80,7 +80,7 @@ let alu_sem (w: width) (op: alu_op)
 let movsx_bits (sz: movsx_sz) : n:pos{n <= 32} =
   match sz with | SX8 -> 8 | SX16 -> 16 | SX32 -> 32
 
-let swap_bits (sz: swap_sz) : pos =
+let swap_bits (sz: swap_sz) : n:pos{n = 16 \/ n = 32 \/ n = 64} =
   match sz with | SW16 -> 16 | SW32 -> 32 | SW64 -> 64
 
 let swap_sem (k: swap_kind) (sz: swap_sz) (d: int{fits 64 d})
