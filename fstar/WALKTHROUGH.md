@@ -251,7 +251,7 @@ lemma against `Formula.valid`.
   and the proof checks, then `goal` is valid.* **Manual-review focus:** this
   statement (it's what CertCheck will rely on for obligations/claims).
 
-## `Ebpf.Annot.fst` — the simulation bridge (PROVED, W64 core)
+## `Ebpf.Annot.fst` — the simulation bridge (PROVED, full ALU fragment)
 
 Connects arena terms to the ISA semantics.
 - `bnds = reg -> option term` — symbolic bindings (each register's value as
@@ -264,14 +264,22 @@ Connects arena terms to the ISA semantics.
   register → its binding). `opterm_sound` — it evaluates to the concrete
   operand value.
 - `defterm b i` — **the SPEC §5 definition term** for the instruction's
-  destination (e.g. `div64` → `ite (s=0) 0 (bvudiv a s)`; shifts → masked;
-  `neg64` → `bvneg`). Returns `None` for the *staged* ops (SDIV/SMOD, all
-  ALU32, MOVSX, byte-swaps) so the checker treats them as unsupported rather
-  than trusting an unproven shape.
+  destination. Covers the *whole* write-a-register fragment (M2.1 hole A):
+  W64 ALU incl. `div64`→`ite (s=0) 0 (bvudiv a s)`, `sdiv64`→`ite (s=0) 0
+  (bvsdiv a s)`, `smod64`→`bvsrem`, masked shifts, `neg64`→`bvneg`; **ALU32**
+  (mov32/neg32/all W32 ALU) via the OP32 zero-extend template; **MOVSX** via
+  sign_extend/extract; **byte swaps** via zero_extend of the concat-of-byte-
+  extracts. Only `Assert_` (a claim, checked elsewhere) and `Exit` (no dst)
+  return `None`.
 - `wdst i` — the destination register when `defterm` supports `i`.
+- Equivalence lemmas the bridge proves once: `sdiv_equiv`/`srem_equiv`
+  (SMT-LIB sign-magnitude `bvsdiv`/`bvsrem` = `trunc_div`/`trunc_mod`, any
+  width), `eval_bswap_from` (concat-of-byte-extracts = `swap_bytes`),
+  `eval_extract_low`/`low_low`/`opbits_low32`/`mask31` (the ALU32/MOVSX
+  extract+zero-extend framing).
 - `mask63` — `logand s 63 = s % 64`, connecting SPEC's explicit shift mask
-  to the semantics' `s % 64`.
-- `res64v` — `U64.v (res64 W64 x) = x`.
+  to the semantics' `s % 64` (`mask31` is its ALU32 analogue).
+- `res64v` — `U64.v (res64 w x) = x` (both widths).
 - **`defterm_sound b rf i`:** if `bagree b rf` and `defterm` supports `i`,
   then the machine step succeeds and rebinding `dst` to its definition term
   *preserves* `bagree` against the stepped register file. **This is the
@@ -298,14 +306,25 @@ Connects arena terms to the ISA semantics.
 
 ---
 
-## What is deliberately *not yet* proved (staged, documented)
+## Status of the once-staged items (now closed) + what remains
 
-- Strict-mode safety **obligations** (div≠0, shift<width discharged by
-  `Ebpf.Proof`) and **claim reporting** are not yet folded into
-  `check_walk`; the current `soundness` is for `Total` (kernel) semantics.
-  The proof-rule soundness they need is already done in `Ebpf.Proof`.
-- `defterm` covers the **W64 core** only. SDIV/SMOD (needs the
-  sign-magnitude = truncated-division equivalence), all **ALU32** (the
-  zero-extend wrapper), **MOVSX** and **byte swaps** return `None` from
-  `defterm` — the checker rejects them rather than trusting them.
+- **Strict-mode obligations + claim reporting (M2.1 hole B) — DONE**, in
+  `Ebpf.CertClaim`: `claim_soundness` (Total: accepted ⟹ safe *and* every
+  `@assert` bound holds) and `strict_soundness` (Defensive: accepted ⟹ safe,
+  no div-by-0, no oversized shift), both for any certificate. `CertCheck`'s
+  own `soundness` remains the Total no-claims statement; the strict/claim
+  walks (`swalk`/`awalk`) live in `CertClaim`.
+- **`defterm` fragment coverage (M2.1 hole A) — DONE.** SDIV/SMOD, ALU32
+  (mov32/neg32/all W32 ALU), MOVSX and byte swaps are all bridged (see the
+  `Ebpf.Annot` section). Anchored to RFC 9669; ALU32 zero-extension is
+  Agni-confirmed (`VALIDATION.md`).
+- **Still staged:** W32-*register* div/shift under strict mode (the
+  obligation atom `obl_atom`/`sobl_defined` are W64-only — a completeness
+  gap, never soundness: strict walk simply rejects those; Total/claim mode
+  covers them). Also control flow (v1), memory (v2), a binary certificate
+  format, a verified lowering, and the Dafny frontend.
+- All soundness is **relative to `Ebpf.Semantics`** (the trusted ISA model).
+  The M1 W64-arith corpus is differentially validated against the real
+  kernel; the newer opcodes' concrete semantics are trusted, not yet run
+  through the differential harness.
 - No step here is `admit`ted. "Staged" means *absent*, not *assumed*.

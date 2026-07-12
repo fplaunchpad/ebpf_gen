@@ -27,10 +27,11 @@ multipass exec test-clone -- bash -c \
   'cd /home/ubuntu/ebpf_gen/fstar && eval $(opam env --switch=default) && make verify'
 ```
 
-Expect, for each of the 12 modules, `Verified module: Ebpf.X` and
+Expect, for each of the 16 modules, `Verified module: Ebpf.X` and
 `All verification conditions discharged successfully`, ending on
-`Ebpf.CertCheck`. Module order:
-`Ast Int Semantics Interval Check Sound Build Serialize Formula Proof Annot CertCheck`.
+`Ebpf.Emit`. Module order:
+`Ast Int Semantics Interval Check Sound Build Serialize Formula Proof Annot
+CertCheck CertClaim Dsl Lower Emit`.
 
 **A single module** (faster while reviewing one file):
 ```

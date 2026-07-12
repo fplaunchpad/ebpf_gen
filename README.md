@@ -86,12 +86,17 @@ frontend, and measurements.
 
 **Machine-checked:** the M1 checker is sound against the ISA model; the
 annotation semantics is well-defined; every proof rule is individually sound;
-symbolic bindings provably track the real machine; and *an accepted program
-runs safely, for any certificate*. **Staged for later milestones (documented,
-not assumed):** control flow (v1) and memory (v2); strict-mode
-obligation/claim integration into the checker walk; the definition-term
-bridge for SDIV/SMOD, ALU32, MOVSX, byte swaps; a binary certificate file
-format; a verified lowering; and the Dafny frontend.
+symbolic bindings provably track the real machine across the *whole*
+straight-line write-a-register fragment (SDIV/SMOD, ALU32/mov32/neg32, MOVSX
+and byte swaps included — the M2.1 definition-term bridge); *an accepted
+program runs safely, for any certificate*; and, in strict (Defensive) mode,
+no div-by-zero or oversized shift occurs and every asserted bound holds. All
+soundness is *relative to the trusted `Ebpf.Semantics` model* (validated
+against the real kernel by the differential harness on the W64 corpus; the
+newer opcodes' semantics are trusted, not yet differentially exercised).
+**Staged for later milestones (documented, not assumed):** control flow (v1)
+and memory (v2); W32-register div/shift under strict mode; a binary
+certificate file format; a verified lowering; and the Dafny frontend.
 
 ## Repository layout
 
