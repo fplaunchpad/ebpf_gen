@@ -77,7 +77,7 @@ let alu_sem (w: width) (op: alu_op)
   : r:int{fits (bits w) r} =
   alu_semn (bits w) op d s
 
-let movsx_bits (sz: movsx_sz) : pos =
+let movsx_bits (sz: movsx_sz) : n:pos{n <= 32} =
   match sz with | SX8 -> 8 | SX16 -> 16 | SX32 -> 32
 
 let swap_bits (sz: swap_sz) : pos =

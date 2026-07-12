@@ -15,10 +15,13 @@
    equivalence (`sdiv_equiv`/`srem_equiv` below) to match M1's `alu_sem`;
    their §5 shapes are the SMT-LIB `bvsdiv`/`bvsrem` (RFC 9669 makes them
    truncated toward zero, `SDIV INT64_MIN -1 = INT64_MIN`, `SMOD _ 0 = _`).
-   Staged (definition terms defined in SPEC §5, bridge lemma deferred): all
-   ALU32 (needs the zero-extend wrapper layer), MOVSX and byte swaps. These
-   return None from `defterm` here so the checker treats them as unsupported
-   in v0-core rather than trusting an unproven shape. *)
+   MOVSX (sign-extend the low 8/16/32 bits) is supported via the §5
+   sign_extend/extract terms and `defterm_sound_movsx`; (W32,SX32) has no §5
+   row (movsx32 is ALU64-only) so it stays unsupported. Staged (definition
+   terms defined in SPEC §5, bridge lemma deferred): all ALU32 (the zero-extend
+   wrapper layer) and byte swaps. These return None from `defterm` here so the
+   checker treats them as unsupported in v0-core rather than trusting an
+   unproven shape. *)
 module Ebpf.Annot
 
 open FStar.Mul
@@ -97,12 +100,26 @@ let defterm (b: bnds) (i: insn) : option term =
         | SDIV-> Some (TIte (Atom KEq s (TC 64 0)) (TC 64 0) (TOp2 Sdiv a s))
         | SMOD-> Some (TOp2 Srem a s))
      | _, _ -> None)
-  | _ -> None                              (* W32 / MovSX / Swap / Assert / Exit staged *)
+  | MovSX w sz dst src ->
+    (* §5: movsx{f}_64 = (sign_extend (64-f)) (extract (f-1) 0 S);
+       movsx{f}_32 = (zero_extend 32) ((sign_extend (32-f)) (extract (f-1) 0 S)).
+       (W32,SX32) has no §5 row (movsx32 is ALU64-only) -> unsupported. *)
+    (match b src with
+     | Some s ->
+       let f = movsx_bits sz in
+       (match w with
+        | W64 -> Some (TSext (64 - f) (TExtract (f - 1) 0 s))
+        | W32 -> if f < 32
+                 then Some (TZext 32 (TSext (32 - f) (TExtract (f - 1) 0 s)))
+                 else None)
+     | None -> None)
+  | _ -> None                              (* W32 ALU / Swap / Assert / Exit staged *)
 
 (* the destination register an instruction writes, when defterm supports it *)
 let wdst (i: insn) : option reg =
   match i with
   | Mov W64 dst _ | Ebpf.Ast.Neg W64 dst | Alu W64 _ dst _ -> Some dst
+  | MovSX _ _ dst _ -> Some dst
   | _ -> None
 
 (* ------------------------------------------------------------------ *)
@@ -132,7 +149,8 @@ let opterm_sound (b: bnds) (rf: regfile) (src: operand)
      | None, _ -> ())               (* contradicts Some? (opterm b src) *)
 #pop-options
 
-let res64v (x: int{fits 64 x}) : Lemma (U64.v (res64 W64 x) == x) = ()
+let res64v (w: width) (x: int{fits (bits w) x}) : Lemma (U64.v (res64 w x) == x) =
+  FStar.Math.Lemmas.pow2_lt_compat 64 32
 
 (* ---- SDIV/SMOD bridge: SMT-LIB bvsdiv/bvsrem = eBPF truncated division ----
    The §5 definition terms use SMT-LIB's sign-magnitude bvsdiv/bvsrem
@@ -185,6 +203,44 @@ let srem_equiv (w: pos) (a: int{fits w a}) (b: int{fits w b})
   end
 #pop-options
 
+(* ---- extract / zero-narrow eval lemmas (MOVSX now, ALU32 next) ---------- *)
+#push-options "--fuel 2 --ifuel 1 --z3rlimit 100"
+(* extracting the low f bits of a width-w term yields (low f) of its value *)
+let eval_extract_low (t: term) (w: pos) (x: int{fits w x}) (f: pos{f <= w})
+  : Lemma (requires evalT t == Some (mkres w x))
+          (ensures evalT (TExtract (f - 1) 0 t) == Some (mkres f (low f x))) =
+  assert_norm (pow2 0 == 1)
+
+(* re-narrowing: taking the low f bits after the low n bits (f <= n) is low f *)
+let low_low (x: int) (f: pos) (n: pos{f <= n})
+  : Lemma (low f (low n x) == low f x) =
+  FStar.Math.Lemmas.pow2_modulo_modulo_lemma_1 x f n
+#pop-options
+
+(* ---- MOVSX bridge (delegated; isolated VC) ------------------------------ *)
+(* MOVSX reads src, takes the low f bits, sign-extends to the op width, and
+   zero-extends to 64 (res64). The §5 term is (sign_extend)(extract) for W64
+   and (zero_extend 32)(sign_extend)(extract) for W32; both evaluate to
+   sext f (bits w) (regbits w sv), which is exactly alu-free step semantics. *)
+#push-options "--fuel 2 --ifuel 2 --z3rlimit 300"
+let defterm_sound_movsx (b: bnds) (rf: regfile) (w: width) (sz: movsx_sz) (dst src: reg)
+  : Lemma (requires bagree b rf /\ Some? (defterm b (MovSX w sz dst src)))
+          (ensures (match wdst (MovSX w sz dst src), defterm b (MovSX w sz dst src),
+                           step rf (MovSX w sz dst src) with
+                    | Some d, Some t, Some rf' -> bagree (upd b d t) rf'
+                    | _, _, _ -> False)) =
+  bagree_lookup b rf src;
+  (match b src, rf src with
+   | Some s, Some sv ->
+     let f = movsx_bits sz in
+     eval_extract_low s 64 (U64.v sv) f;
+     (match w with W32 -> low_low (U64.v sv) f 32 | W64 -> ());
+     let rv = res64 w (sext f (bits w) (regbits w sv)) in
+     res64v w (sext f (bits w) (regbits w sv));
+     bagree_update b rf dst (Some?.v (defterm b (MovSX w sz dst src))) rv
+   | _, _ -> ())
+#pop-options
+
 #push-options "--z3rlimit 600 --fuel 4 --ifuel 2"
 
 let defterm_sound (b: bnds) (rf: regfile) (i: insn)
@@ -196,13 +252,13 @@ let defterm_sound (b: bnds) (rf: regfile) (i: insn)
   | Mov W64 dst src ->
     opterm_sound b rf src;
     (match opterm b src, opbits rf W64 src with
-     | Some t, Some v -> res64v v; bagree_update b rf dst t (res64 W64 v)
+     | Some t, Some v -> res64v W64 v; bagree_update b rf dst t (res64 W64 v)
      | _, _ -> ())
   | Ebpf.Ast.Neg W64 dst ->
     bagree_lookup b rf dst;
     (match b dst, rf dst with
      | Some a, Some dv ->
-       res64v (wrap 64 (0 - regbits W64 dv));
+       res64v W64 (wrap 64 (0 - regbits W64 dv));
        bagree_update b rf dst (TOp1 Ebpf.Formula.Neg a)
          (res64 W64 (wrap 64 (0 - regbits W64 dv)))
      | _, _ -> ())
@@ -212,7 +268,7 @@ let defterm_sound (b: bnds) (rf: regfile) (i: insn)
     (match b dst, rf dst, opterm b src, opbits rf W64 src with
      | Some a, Some dv, Some s, Some v ->
        let rv = res64 W64 (alu_sem W64 op (regbits W64 dv) v) in
-       res64v (alu_sem W64 op (regbits W64 dv) v);
+       res64v W64 (alu_sem W64 op (regbits W64 dv) v);
        (match op with
         | LSH | RSH | ARSH -> mask63 v
         | SDIV -> if v <> 0 then sdiv_equiv 64 (regbits W64 dv) v else ()
@@ -220,6 +276,7 @@ let defterm_sound (b: bnds) (rf: regfile) (i: insn)
         | _ -> ());
        bagree_update b rf dst (Some?.v (defterm b i)) rv
      | _, _, _, _ -> ())
+  | MovSX w sz dst src -> defterm_sound_movsx b rf w sz dst src
   | _ -> ()
 
 #pop-options
