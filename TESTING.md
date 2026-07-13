@@ -96,6 +96,18 @@ differs from the real one. The two mode-divergence witnesses (`ex_div0_reg`,
 `ex_shift_reg`) are *designed* to show F*-Strict reject vs kernel accept —
 that is not a divergence (different columns), it's the point.
 
+`diff.py` compares only the accept/reject **verdict**. To also check that the
+kernel **computes** what `Ebpf.Semantics` predicts (the SDIV/SMOD/MOVSX/byteswap
+programs put their result in R0), run the value differential — it uses
+`BPF_PROG_TEST_RUN` (`loader -r`) and compares each retval to the F*-derived
+expectation (asserted in `Ebpf.Dump` as `r0lo exX == ..`):
+```
+multipass exec kernel7 -- bash -c \
+  'cd /home/ubuntu/ebpf_gen/harness && make -s loader && sudo python3 valcheck.py manifest.tsv'
+```
+Expect every row `OK` and `all values match: real kernel computes what
+Ebpf.Semantics predicts`.
+
 You can also load any single program by hand to see the verifier log:
 ```
 multipass exec kernel7 -- bash -c \

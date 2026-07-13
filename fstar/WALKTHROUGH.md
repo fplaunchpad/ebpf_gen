@@ -323,8 +323,10 @@ Connects arena terms to the ISA semantics.
   gap, never soundness: strict walk simply rejects those; Total/claim mode
   covers them). Also control flow (v1), memory (v2), a binary certificate
   format, a verified lowering, and the Dafny frontend.
-- All soundness is **relative to `Ebpf.Semantics`** (the trusted ISA model).
-  The M1 W64-arith corpus is differentially validated against the real
-  kernel; the newer opcodes' concrete semantics are trusted, not yet run
-  through the differential harness.
+- All soundness is **relative to `Ebpf.Semantics`** (the trusted ISA model),
+  which is differentially validated against the real kernel (7.0): `diff.py`
+  compares accept/reject verdicts and `valcheck.py` compares
+  `BPF_PROG_TEST_RUN` return values to the model. The M2.1 opcodes
+  (SDIV/SMOD toward-zero, MOVSX sign-extension, byte swaps) are now exercised
+  both ways — verdicts *and* computed values match the real kernel.
 - No step here is `admit`ted. "Staged" means *absent*, not *assumed*.

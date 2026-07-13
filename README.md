@@ -91,9 +91,11 @@ straight-line write-a-register fragment (SDIV/SMOD, ALU32/mov32/neg32, MOVSX
 and byte swaps included — the M2.1 definition-term bridge); *an accepted
 program runs safely, for any certificate*; and, in strict (Defensive) mode,
 no div-by-zero or oversized shift occurs and every asserted bound holds. All
-soundness is *relative to the trusted `Ebpf.Semantics` model* (validated
-against the real kernel by the differential harness on the W64 corpus; the
-newer opcodes' semantics are trusted, not yet differentially exercised).
+soundness is *relative to the trusted `Ebpf.Semantics` model*, which is
+differentially validated against the real kernel (7.0): `diff.py` checks
+accept/reject verdicts and `valcheck.py` checks `BPF_PROG_TEST_RUN` return
+values against the model — now covering SDIV/SMOD (toward-zero), MOVSX
+(sign-extension) and byte swaps, not just the W64 arithmetic corpus.
 **Staged for later milestones (documented, not assumed):** control flow (v1)
 and memory (v2); W32-register div/shift under strict mode; a binary
 certificate file format; a verified lowering; and the Dafny frontend.
