@@ -308,3 +308,56 @@ Scope: ARITHUNARY / ARITHBINREG / ARITHBINIMM. Full M2 plan in
 ## Milestone 2 status: COMPLETE (spec + verified metatheory + pipeline + DSL
 ## frontend + measurements). Remaining staged items are v1/v2 (control flow,
 ## memory) + the deferred bridge lemmas / binary cert format / Dafny frontend.
+
+---
+
+# Milestone MS — KeelSpec: a mechanized specification for the ISA fragment
+
+The same instruction-level facts are currently maintained by hand in four
+notations — `Ebpf.Semantics` (what an instruction computes, and when it is
+defined), `Ebpf.Serialize` (how it encodes), and the prose tables in
+`CONSTRAINTS.md` / `ir/SPEC.md` — with nothing forcing them to agree. MS
+makes one source (`spec/ebpf_alu.kspec`) the authority and derives the rest.
+Full design, IL and backend contracts: [`spec/DESIGN.md`](spec/DESIGN.md).
+
+Scope: the *current* fragment only — 13 ALU ops x {W32,W64} x {reg,imm},
+NEG, MOV, MOVSX, byte swaps = 72 instruction instances, 5 `Ebpf.Ast`
+constructors. **Control flow (the JMP class) is deferred to the following
+milestone**, together with the `writes`-target generalization it needs;
+memory stays on the v2 track.
+
+The generator is **untrusted by construction**: its F* output is re-verified
+by `make verify` (the existing soundness proofs are stated against the very
+functions it generates) and its encodings are differentially validated
+against the real kernel. A wrong generator produces code that fails
+verification or the differential — never a silent unsoundness.
+
+## MS0 — scaffolding + design note
+- [x] `spec/` top-level directory
+- [x] `spec/DESIGN.md` — DSL grammar, typed IL, backend contracts (F* /
+      encoding / prose), positioning vs Sail and vs Wasm-SpecTec, trust story
+- [x] this plan section
+
+## MS1 — DSL + parser + checked IL
+- [x] `spec/ebpf_alu.kspec` — the full current fragment (5 families, 20 rows,
+      72 instances), including the `(W32,SX32)` MOVSX exclusion
+- [ ] `spec/specgen/` — OCaml/dune project: lexer + recursive-descent parser,
+      elaboration to the typed IL, meta-checks, `specgen check` CLI
+- [ ] meta-checks K1-K9 (AST conformance, scope, combinator well-formedness,
+      well-widthedness, side-condition obligations, validity == exclusions,
+      field completeness, encoding disjointness, form exhaustiveness), each
+      reporting `file:line:col`
+- [ ] negative fixtures (malformed `.kspec`) + `make -C spec test`
+
+## MS2 — F* semantics backend (staged)
+Generate `Ebpf.Semantics.{alu_semn, alu_defined, movsx_bits, swap_bits,
+swap_sem}` from the IL; acceptance = `make verify` passes unchanged and the
+differential harness stays at zero divergences.
+
+## MS3 — encoding backend (staged)
+Generate `Ebpf.Serialize.{cls, op_bits, op_off, movsx_off, swap_imm,
+encode_insn}` + an encode/decode round-trip corpus from the same instances.
+
+## MS4 — prose backend (staged)
+Derive the per-instruction prose tables from `sem`/`defined` by structural
+recursion; prose is never authored, so it cannot drift.
