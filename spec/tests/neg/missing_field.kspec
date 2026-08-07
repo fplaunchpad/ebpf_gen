@@ -1,0 +1,29 @@
+# NEGATIVE FIXTURE - K7 completeness.
+# The `off` encoding field is given neither at family level (`enc`) nor as a
+# column, so the entries do not determine an encoding.
+# EXPECT: [K7] family `alu` never gives encoding field `off`
+
+spec neg_missing_field {
+  version 1
+  isa     "negative fixture"
+  host    little-endian
+}
+
+enum width     { W32 : bits=32 enc=0x04 ; W64 : bits=64 enc=0x07 }
+enum operand   { reg : enc=0x08 ; imm : enc=0x00 }
+enum alu_op    { ADD ; SUB ; MUL ; DIV ; SDIV ; MOD ; SMOD ; AND ; OR ; XOR ; LSH ; RSH ; ARSH }
+enum movsx_sz  { SX8 : bits=8 ; SX16 : bits=16 ; SX32 : bits=32 }
+enum swap_kind { ToLE ; ToBE ; Bswap }
+enum swap_sz   { SW16 : bits=16 ; SW32 : bits=32 ; SW64 : bits=64 }
+
+family alu {
+  ctor     Alu(w, op, dst:reg, src:operand)
+  key      op : alu_op
+  axis     w : width, src : operand
+  width    n = bits w
+  sem      (n; d = dst@n, s = src@n) : bits n
+  defined  (n; s)
+  enc      cls = w, sbit = src
+  cols     name | opc  | defined | sem
+  ADD      | 0x00 | -       | wrap n (d + s)
+}

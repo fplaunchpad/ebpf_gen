@@ -339,20 +339,31 @@ verification or the differential — never a silent unsoundness.
 - [x] this plan section
 
 ## MS1 — DSL + parser + checked IL
-- [x] `spec/ebpf_alu.kspec` — the full current fragment (5 families, 20 rows,
-      72 instances), including the `(W32,SX32)` MOVSX exclusion
-- [ ] `spec/specgen/` — OCaml/dune project: lexer + recursive-descent parser,
-      elaboration to the typed IL, meta-checks, `specgen check` CLI
-- [ ] meta-checks K1-K9 (AST conformance, scope, combinator well-formedness,
+- [x] `spec/ebpf_alu.kspec` — the full current fragment (5 families, 19
+      entries, 72 instances), including the `(W32,SX32)` MOVSX exclusion
+- [x] `spec/specgen/` — OCaml/dune project (stdlib only): lexer +
+      recursive-descent parser, elaboration to the typed IL (`lib/il.ml` =
+      the whole backend API), `specgen check|list|astcheck` CLI
+- [x] meta-checks K1-K9 (AST conformance, scope, combinator well-formedness,
       well-widthedness, side-condition obligations, validity == exclusions,
       field completeness, encoding disjointness, form exhaustiveness), each
-      reporting `file:line:col`
-- [ ] negative fixtures (malformed `.kspec`) + `make -C spec test`
+      reporting `file:line:col` + a caret; K1/K9 diagnostics are directional
+      and itemized ("in spec, not in AST" / "in AST, not in spec")
+- [x] `specgen astcheck` — re-extracts the constructors from
+      `fstar/Ebpf.Ast.fst` and diffs them against specgen's built-in table,
+      so the one hand-maintained table cannot drift silently
+- [x] 6 negative fixtures + encoding anchors vs `Ebpf.Serialize` +
+      the drift check, wired into `make -C spec test` (15 assertions)
 
 ## MS2 — F* semantics backend (staged)
 Generate `Ebpf.Semantics.{alu_semn, alu_defined, movsx_bits, swap_bits,
-swap_sem}` from the IL; acceptance = `make verify` passes unchanged and the
-differential harness stays at zero divergences.
+swap_sem}` — already named and referenced by name across `Ebpf.Interval`,
+`Ebpf.Sound` and `Ebpf.Annot`, so they stay plain `let` — plus
+`neg_semn`, `mov_semn`, `movsx_semn`, which are inline in `stepx` today and
+must be emitted as `unfold let` so every downstream proof term stays
+textually identical. Acceptance = `make verify` passes unchanged and the
+differential harness stays at zero divergences. MS2 also lands the MOVSX
+guard fix (`f <= bits w` -> `f < bits w`, see `spec/DESIGN.md` section 8).
 
 ## MS3 — encoding backend (staged)
 Generate `Ebpf.Serialize.{cls, op_bits, op_off, movsx_off, swap_imm,

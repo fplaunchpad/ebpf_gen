@@ -1,0 +1,30 @@
+# NEGATIVE FIXTURE - K2 scope (dangling operand reference).
+# `defined (n; s)` says the definedness predicate may read only the SOURCE
+# operand - which is what Ebpf.Semantics.alu_defined's signature allows.
+# Reading `d` here would generate an F* function that does not typecheck.
+# EXPECT: [K2] unknown variable `d` in a `defined` clause
+
+spec neg_dangling_ref {
+  version 1
+  isa     "negative fixture"
+  host    little-endian
+}
+
+enum width     { W32 : bits=32 enc=0x04 ; W64 : bits=64 enc=0x07 }
+enum operand   { reg : enc=0x08 ; imm : enc=0x00 }
+enum alu_op    { ADD ; SUB ; MUL ; DIV ; SDIV ; MOD ; SMOD ; AND ; OR ; XOR ; LSH ; RSH ; ARSH }
+enum movsx_sz  { SX8 : bits=8 ; SX16 : bits=16 ; SX32 : bits=32 }
+enum swap_kind { ToLE ; ToBE ; Bswap }
+enum swap_sz   { SW16 : bits=16 ; SW32 : bits=32 ; SW64 : bits=64 }
+
+family alu {
+  ctor     Alu(w, op, dst:reg, src:operand)
+  key      op : alu_op
+  axis     w : width, src : operand
+  width    n = bits w
+  sem      (n; d = dst@n, s = src@n) : bits n
+  defined  (n; s)
+  enc      cls = w, sbit = src
+  cols     name | opc  | off | defined | sem
+  DIV      | 0x30 | 0   | d <> 0  | if s = 0 then 0 else wrap n (d / s)
+}

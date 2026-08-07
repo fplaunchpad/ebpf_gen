@@ -227,20 +227,28 @@ type cond   = CTrue | CCmp of cmp * expr * expr * pos
 
 type role   = RDst | RSrcReg | RSrcOperand
 type read   = { r_var : string; r_role : role; r_width : wexp }
-type field  = FLit of int | FAny                       (* `*` *)
+type field  = FLit of int | FAny             (* `*` = operand-carried *)
 type enc    = { cls : field; opc : field; sbit : field; off : field; imm : field }
+(* how a field is SPELLED before instantiation (MS3 wants this, not just
+   the resolved bytes) *)
+type fieldsrc = FSLit of int | FSAny | FSAxis of string | FSWidth of string
 
-type oblig  = ONonZero of expr * cond list   (* divisor ≠ 0 under path cond *)
-            | OLe of wexp * wexp             (* sext F ≤ N *)
-            | ONonNeg of expr                (* pow2 argument *)
-            | ODivides of int * wexp         (* bswap: 8 | width, from result ty *)
+type oblig  = ONonZero of expr * pos         (* a divisor is non-zero *)
+            | ONonNeg  of expr * pos         (* a pow2 argument *)
+            | OLe of wexp * wexp * pos       (* sext: source ≤ target width *)
+            | ODivides of int * wexp * pos   (* bswap: 8 | result width *)
+
+type argval = AEnum of string * string       (* enum name, case name *)
+            | ARole of role
+type ctorarg = CAAxis of string | CARole of role
 
 type instance = {                             (* one real machine instruction *)
   i_id      : string;                         (* "alu/ADD/W32/reg" *)
   i_family  : string;
   i_ctor    : string;                         (* "Alu" *)
-  i_args    : (string * argval) list;         (* w=W32; op=ADD; dst=<role>; src=OpReg *)
+  i_args    : (string * argval) list;         (* ctor argument order *)
   i_enc     : enc;                            (* concrete except FAny *)
+  i_opcode  : int;                            (* cls + opc + sbit, or -1 *)
   i_widths  : (string * int) list;            (* n=32 … concrete for this instance *)
   i_reads   : read list;
   i_result  : ty;
@@ -253,16 +261,26 @@ type instance = {                             (* one real machine instruction *)
 
 type entry = {                                (* one table row = one key case *)
   e_name : string; e_key : string option;
-  e_sem : expr; e_defined : cond; e_enc_row : (string * field) list; e_pos : pos }
+  e_sem : expr; e_defined : cond;
+  e_enc_row : (string * fieldsrc) list; e_pos : pos }
+
+type semsig = { sg_widths : string list; sg_vals : read list; sg_result : ty }
 
 type family = {
   f_name : string; f_ctor : string; f_ctor_args : ctorarg list;
-  f_key : (string * enum) option; f_axes : (string * enum) list;
+  f_key : (string * string) option;           (* var, enum *)
+  f_axes : (string * string) list;            (* non-key axes *)
   f_widths : (string * string) list;          (* width var  ←  axis *)
-  f_sem_sig : sigture; f_def_sig : sigture; f_valid : cond;
-  f_excludes : ((string * string) list * string) list;
-  f_enc_family : (string * field) list;
-  f_cols : string list; f_entries : entry list; f_cites : string list }
+  f_sem : semsig;
+  f_def_widths : string list; f_def_vals : string list;
+  f_valid : cond;
+  f_excludes : ((string * string) list * string) list;   (* binds, reason *)
+  f_enc_family : (string * fieldsrc) list;
+  f_cols : string list; f_entries : entry list; f_cites : string list;
+  f_pos : pos }
+
+type enum_case = { c_name : string; c_bits : int option; c_enc : int option }
+type enum = { en_name : string; en_cases : enum_case list; en_pos : pos }
 
 type spec = { s_name : string; s_version : int; s_isa : string;
               s_host : endianness;
@@ -287,7 +305,7 @@ error with `file:line:col` (or a summary if all pass):
 
 | id | check | rejects |
 |---|---|---|
-| **K1** AST conformance | every declared enum's case list, and every `ctor`'s name/arity/argument kinds, match `specgen`'s built-in `Ebpf.Ast` reference table; `Assert_`/`Exit` are known-pseudo and must not be claimed | drift from `Ebpf.Ast` |
+| **K1** AST conformance | every declared enum's case list (and order), and every `ctor`'s name/arity/argument kinds, match `specgen`'s built-in `Ebpf.Ast` reference table; `Assert_`/`Exit` are known-pseudo and must not be claimed. `specgen astcheck fstar/Ebpf.Ast.fst` re-extracts the real constructor names and diffs them against that table, so the table itself cannot drift silently | drift from `Ebpf.Ast`, in either direction |
 | **K2** scope | every variable in `sem` is a declared width var or a `sem` value param; every variable in `defined` is in the `defined` signature (⊆ `sem`'s); `valid` mentions width vars only | dangling operand reference; `defined` reading `d` |
 | **K3** combinator well-formedness | every applied name is in the combinator table with the right width-arg/value-arg arity | unknown combinator; wrong arity |
 | **K4** well-widthedness | bidirectional type check of every instance's `sem` against its declared result type, with concrete widths | `logand 32 d s` on 64-bit operands; a literal that does not fit; branches of different width |
@@ -301,6 +319,26 @@ K8 is deliberately stronger than "no duplicate `(class, op, off)` triple":
 `*` (operand-carried `imm`) is treated as matching *any* literal, so an
 overlap is reported whenever two forms *could* decode to the same bytes.
 
+K9's product includes the `OpReg`/`OpImm` choice of an `operand` argument, so
+a forgotten `(W32, imm)` form is a hole, not an invisible omission. Declared
+exclusions count as covered — an exclusion is a load-bearing spec *claim*
+("this form does not exist"), which is why one costs a `valid` predicate that
+agrees with it (K6), a mandatory reason string, and (from MS4) a kernel
+negative test.
+
+Every diagnostic prints `file:line:col`, the offending source line, and a
+caret. K1 and K9 report **directionally and itemized** —
+
+```
+[K9] family `alu` does not cover Ebpf.Ast constructor `Alu` exhaustively:
+       in AST, not in spec: Alu(W32,ARSH,reg), Alu(W32,ARSH,imm), …
+       in spec, not in AST: (none)
+```
+
+— because the MS5 drift experiment (replaying a pre-cpuv4 spec against the
+current AST) makes K1/K9 fire *by design*: their output is that experiment's
+measurement surface, not just a failure.
+
 K9 prints the constructor list it validated against, e.g.
 
 ```
@@ -310,6 +348,23 @@ AST conformance: Ebpf.Ast constructors [Alu; Neg; Mov; MovSX; Swap]
 
 `specgen check` also prints the instance count per family and the total, so a
 diff in the summary line is a visible change in ISA coverage.
+
+### Running it
+
+The OCaml toolchain lives in the `test-clone` VM:
+
+```sh
+multipass exec test-clone -- mkdir -p /home/ubuntu/wt-ms01/fstar
+multipass transfer -r spec test-clone:/home/ubuntu/wt-ms01/
+multipass transfer fstar/Ebpf.Ast.fst test-clone:/home/ubuntu/wt-ms01/fstar/
+multipass exec test-clone -- bash -c \
+  'eval $(opam env --switch=default) && make -C /home/ubuntu/wt-ms01/spec test'
+```
+
+`make -C spec test` = the positive check + the encoding anchors against
+`Ebpf.Serialize`'s own `assert_norm` values + the AST drift check + the six
+negative fixtures in `spec/tests/neg/` (each of which must be rejected with
+its expected diagnostic *and* a position).
 
 ## 5. Backend contracts (later milestones — MS2/MS3/MS4)
 
@@ -327,6 +382,23 @@ which for `alu` is exactly today's `alu_semn : (n:pos) → alu_op → (d:{fits n
 → (s:{fits n}) → {fits n}` and `alu_defined`, and for `swap` exactly
 `swap_sem`. Enum `bits` attributes generate the width tables (`movsx_bits`,
 `swap_bits`, `bits`).
+
+**`unfold let` vs plain `let` — a binding rule, not a style choice.**
+
+| family | today in `Ebpf.Semantics` | MS2 emits |
+|---|---|---|
+| `alu` | `alu_semn`, `alu_defined` — *named*, and referenced **by name** from `Ebpf.Interval`, `Ebpf.Sound`, `Ebpf.Annot` | plain `let` |
+| `movsx`/`swap` width tables | `movsx_bits`, `swap_bits`, `swap_sem` — named, referenced by name | plain `let` |
+| `neg`, `mov`, `movsx` value semantics | **inline in `stepx`'s match arms** — no named function exists | `unfold let` (`neg_semn`, `mov_semn`, `movsx_semn`) |
+
+The rule: *inline today ⇒ `unfold let`; named today ⇒ plain `let`.* F*
+unfolds `unfold let` at elaboration, so every downstream proof term (e.g.
+`Ebpf.Annot.defterm_sound`'s Neg case, which literally mentions
+`wrap 64 (0 - regbits W64 dv)`) stays textually identical and the
+re-verification gate cannot be disturbed by the refactor. The converse
+matters too: making `alu_semn` `unfold` would inline a 13-branch match into
+every VC that mentions it and blow up `tf_alu_sound`. `stepx` then gets a
+three-line hand edit to call the generated functions — the documented glue.
 
 The contract MS2 relies on:
 
@@ -432,11 +504,14 @@ proof-preserving but wrong about the ISA* — i.e. it agrees with the `.kspec`
 and F* accepts it, but the `.kspec` is wrong. That is spec risk, not
 generator risk, and it is what the differential harness exists for. The one
 place `specgen`'s own knowledge is load-bearing is K1's built-in `Ebpf.Ast`
-reference table (`spec/specgen/lib/ast_ref.ml`): if `Ebpf.Ast` gains a
-constructor, that table must be updated by hand or K1/K9 will validate
-against a stale AST. It is deliberately one small file with line references
-into `fstar/Ebpf.Ast.fst`; parsing `Ebpf.Ast.fst` directly is a possible
-later hardening.
+reference table (`spec/specgen/lib/astref.ml`): if `Ebpf.Ast` gains a
+constructor, that table must be updated by hand or K1/K9 would validate
+against a stale AST. That hazard is *caught, not merely documented*:
+`specgen astcheck fstar/Ebpf.Ast.fst` re-extracts the constructor and case
+names straight from the F* source (a scan for `type …` declarations and the
+identifiers following each `|` — deliberately not an F* parser) and diffs
+them against the table, directionally; `make -C spec test` runs it. A stale
+table is therefore a loud test failure rather than a silent wrong answer.
 
 ## 8. Deviations from the approved sketch
 
@@ -454,17 +529,33 @@ later hardening.
 
 **MOVSX `(W32, SX32)` — a real discrepancy found while writing this.**
 `Ebpf.Check.fst:121` rejects it extensionally (`W32? w && SX32? sz`),
-`Ebpf.Annot.fst:158` excludes it (`f < 32`), but
-`Ebpf.Semantics.fst:129` guards with `f <= bits w`, which is *true* for
-`(W32, SX32)` — so the model currently steps that (non-)instruction as the
-identity instead of getting stuck, despite the comment on the next line
-saying it is invalid. `valid f < n` is the intensional predicate that yields
-exactly the five real forms, and it is what the spec states; K6 forces the
-`exclude` line to agree with it. Adopting it means MS2 emits `if f < bits w`,
-which **changes one reachable behavior of the trusted `Ebpf.Semantics.stepx`**
-(no soundness consequence — `Ebpf.Check` already rejects the form — but it is
-a change to a trusted file and is flagged for explicit sign-off, not made
-silently).
+`Ebpf.Annot.fst:158` excludes it (`f < 32`), but `Ebpf.Semantics.fst:129`
+guards with `f <= bits w` — and since `movsx_bits : n:pos{n <= 32}` and
+`bits w ∈ {32, 64}`, that guard is a **tautology**: its `else None` branch is
+dead code for *every* `(w, sz)`, not merely wrong for `(W32, SX32)`. The
+model therefore steps that non-instruction as the identity, despite the
+comment on the next line saying it is invalid.
+
+`valid f < n` is the intensional predicate that yields exactly the five real
+forms, and it is what the spec states; K6 forces the `exclude` line to agree
+with it. Adopting it means MS2 emits `if f < bits w`, which **changes one
+reachable behavior of the trusted `Ebpf.Semantics.stepx`** — so it is
+sign-off, not silence. The safety argument, to be recorded in the MS2 commit:
+
+- all five real forms satisfy `f < bits w` (8, 16, 32 < 64; 8, 16 < 32), so
+  every reachable call is unaffected;
+- `Ebpf.Check.fst:121` already rejects `(W32, SX32)`, so `check_insn_sound`'s
+  obligation is vacuous there;
+- `Ebpf.Annot.defterm` already returns `None` for it;
+- `tf_movsx` / `tf_movsx_sound` keep their `f <= n` refinement (satisfied by
+  every reachable call — no edit);
+- nothing in `Ebpf.Build` / `Ebpf.Dump` / `Ebpf.CertClaim` uses `SX32`.
+
+`make verify` is the arbiter: if it stays green, the change is proved
+harmless. MS4 adds a kernel negative test (`BPF_ALU|BPF_MOV|BPF_X` with
+`off=32` must be rejected by the real verifier) so the claim in the
+`exclude` reason is evidence-backed rather than asserted. `CONSTRAINTS.md`
+C13 records the issue.
 
 ## 9. Deferred (and where it plugs in)
 
