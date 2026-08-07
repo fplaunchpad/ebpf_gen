@@ -185,6 +185,12 @@ and cond_str = function
 
 let field_str = function FLit n -> Printf.sprintf "0x%02x" n | FAny -> "*"
 
+let fieldsrc_str = function
+  | FSLit n -> Printf.sprintf "0x%02x" n
+  | FSAny -> "*"
+  | FSAxis a -> "axis " ^ a
+  | FSWidth w -> "width " ^ w
+
 let role_str = function RDst -> "dst" | RSrcReg -> "src:reg" | RSrcOperand -> "src:operand"
 
 let expr_pos = function

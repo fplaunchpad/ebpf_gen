@@ -46,6 +46,16 @@ anchor swap/ToLE/SW16      0xd4 "Serialize.fst:75 0xd0 + 0x04"
 anchor swap/ToBE/SW64      0xdc "Serialize.fst:76 0xd0 + 0x08 + 0x04"
 anchor swap/Bswap/SW32     0xd7 "Serialize.fst:77 0xd0 + 0x07"
 
+echo "== IL: family-level encoding spellings (what MS3 reads) =="
+spell() {          # family  expected-spelling
+  if echo "$list" | grep -A2 "^family $1 " | grep -qF "enc family: $2"; then
+    ok "$1 enc family: $2"
+  else bad "$1 enc family: expected '$2'"; fi
+}
+spell alu   "cls = axis w, sbit = axis src"
+spell movsx "cls = axis w, opc = 0xb0, sbit = 0x08, off = width f"
+spell swap  "off = 0x00, imm = width m"
+
 echo "== AST drift (specgen/lib/astref.ml vs Ebpf.Ast.fst) =="
 if [ -f "$EBPF_AST" ]; then
   if out=$("$SPECGEN" astcheck "$EBPF_AST" 2>&1); then ok "astcheck $EBPF_AST"

@@ -309,11 +309,28 @@ error with `file:line:col` (or a summary if all pass):
 | **K2** scope | every variable in `sem` is a declared width var or a `sem` value param; every variable in `defined` is in the `defined` signature (⊆ `sem`'s); `valid` mentions width vars only | dangling operand reference; `defined` reading `d` |
 | **K3** combinator well-formedness | every applied name is in the combinator table with the right width-arg/value-arg arity | unknown combinator; wrong arity |
 | **K4** well-widthedness | bidirectional type check of every instance's `sem` against its declared result type, with concrete widths | `logand 32 d s` on 64-bit operands; a literal that does not fit; branches of different width |
-| **K5** side conditions | each instance's obligations are discharged syntactically where possible (`sext F ≤ N`, `pow2` arg non-negative, divisor non-zero under the enclosing path condition) and **recorded in the IL** for the F* backend either way | `sem` for DIV without the `s = 0` guard |
+| **K5** side conditions | every side condition is **recorded in the IL** (`i_obligs`) for the F* backend, and the ones decidable without a solver are decided here — see the exact procedures below | `sem` for DIV without the `s = 0` guard; `pow2 (sval n s)` |
 | **K6** validity ≡ exclusions | the instances failing `valid` are *exactly* the declared `exclude` set | a `valid` predicate and an `exclude` list that disagree |
 | **K7** completeness | every family gives each of `cls/opc/sbit/off/imm` exactly once (family-level or column, never both, `imm` defaulting to `*`), plus `defined` and `sem` for every row; every row has every declared column | missing field; duplicated field |
 | **K8** encoding disjointness | no two instances have *compatible* encoding keys `(cls, opc, sbit, off, imm)`, where `*` is compatible with anything | SDIV encoded with `off = 0` (would alias DIV); two forms sharing an opcode |
 | **K9** exhaustiveness | for every constructor in the AST table, the covered instances ∪ the excluded points = the full product of its argument enums | a missing `ARSH` row; a forgotten `(W32, imm)` form |
+
+**Exactly what K5 decides.** It proves no F* preconditions — F* does that,
+on the generated code (§7). What it settles syntactically is:
+
+- `sext F ≤ N` and `bswap NB ≥ 1`: concretely, per instance (widths are
+  finite, so this is complete);
+- `bswap`'s result width: `bswap (m / 8) d : bits (8·(m/8))` must equal the
+  declared `bits m`, which holds at each concrete `m` and is recorded as
+  `ODivides (8, m)` for the symbolic case;
+- **divisor non-zero**, along the enclosing path condition: a non-zero
+  literal, any `pow2 _`, a `sval` of something non-zero, or a variable a
+  guard has already excluded zero for (`if s = 0 then … else …` gives
+  `s <> 0` in the else branch). Anything else is an error;
+- **`pow2`'s argument non-negative**, by denial: `0 - _`, `sval _`,
+  `trunc_div`, `trunc_mod` and negative literals are rejected; everything
+  else is a bit pattern, a width, or a sum/product/quotient of those, hence
+  non-negative. (So `pow2 (s % n)` passes and `pow2 (sval n s)` does not.)
 
 K8 is deliberately stronger than "no duplicate `(class, op, off)` triple":
 `*` (operand-carried `imm`) is treated as matching *any* literal, so an

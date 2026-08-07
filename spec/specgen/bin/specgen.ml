@@ -45,6 +45,38 @@ let summary (file : string) (sp : Il.spec) (log : string list) =
   Printf.printf "OK: %s - %d entries, %d instances, %d checks passed.\n" file nent
     (List.length sp.Il.s_instances) (List.length log)
 
+(* the structured view: what the F* backend prints from, and how each family
+   SPELLS its encoding fields before instantiation (what MS3 reads) *)
+let list_families (sp : Il.spec) =
+  List.iter
+    (fun (f : Il.family) ->
+      Printf.printf "family %s  ctor %s%s%s\n" f.Il.f_name f.Il.f_ctor
+        (match f.Il.f_key with Some (v, e) -> Printf.sprintf "  key %s:%s" v e | None -> "")
+        (if f.Il.f_axes = [] then ""
+         else
+           "  axes "
+           ^ names (List.map (fun (v, e) -> v ^ ":" ^ e) f.Il.f_axes));
+      Printf.printf "  widths:     %s\n"
+        (names (List.map (fun (w, a) -> Printf.sprintf "%s = bits %s" w a) f.Il.f_widths));
+      Printf.printf "  enc family: %s\n"
+        (names
+           (List.map (fun (k, v) -> k ^ " = " ^ Il.fieldsrc_str v) f.Il.f_enc_family));
+      List.iter
+        (fun (e : Il.entry) ->
+          Printf.printf "  entry %-6s enc row: %-28s defined: %s\n" e.Il.e_name
+            (if e.Il.e_enc_row = [] then "(none)"
+             else
+               names (List.map (fun (k, v) -> k ^ " = " ^ Il.fieldsrc_str v) e.Il.e_enc_row))
+            (Il.cond_str e.Il.e_defined))
+        f.Il.f_entries;
+      List.iter
+        (fun (binds, reason) ->
+          Printf.printf "  excluded:   %s  (%s)\n"
+            (names (List.map (fun (a, c) -> a ^ "=" ^ c) binds))
+            reason)
+        f.Il.f_excludes)
+    sp.Il.s_families
+
 let list_instances (sp : Il.spec) =
   List.iter
     (fun (i : Il.instance) ->
@@ -119,6 +151,8 @@ let () =
     (try
        let sf = Parse.parse_file file in
        let sp, _ = Elab.elab sf in
+       list_families sp;
+       print_newline ();
        list_instances sp
      with
      | Kpos.Kerr (p, m) -> prerr_string (Kpos.render p m); exit 1
