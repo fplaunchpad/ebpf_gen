@@ -8,3 +8,5 @@ context/
 ir/certifier/bin/Ebpf_*.ml
 ir/certifier/_build/
 CHECKPOINT.md
+.claude/
+spec/specgen/_build/
