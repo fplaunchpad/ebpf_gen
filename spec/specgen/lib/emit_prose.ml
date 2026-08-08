@@ -537,7 +537,7 @@ let family_intro b (sp : spec) (f : family) (insts : instance list) =
     f.f_entries;
   bp b "\n"
 
-let instance_section b (f : family) (i : instance) =
+let instance_section b (host : endianness) (f : family) (i : instance) =
   let ctx = inst_ctx i in
   let mn, ops = mnemonic f i in
   bp b "#### `%s%s` — `%s`\n\n" mn (if ops = "" then "" else " " ^ ops) i.i_id;
@@ -559,7 +559,20 @@ let instance_section b (f : family) (i : instance) =
      | Some n -> sprintf ", a %d-bit result" n
      | None -> "");
   bp b "\n**Operation** — `dst = %s`\n\n" (ps ctx i.i_sem);
-  bp b "%s\n\n" (en_top ctx "dst" i.i_sem);
+  (* the host pin is what makes a `low`/`bswap` semantics the right one, so it
+     is stated wherever one of them occurs, not only once per family *)
+  let sentence = en_top ctx "dst" i.i_sem in
+  let sentence =
+    if not (has_comb (fun c -> c = Bswap || c = Low) i.i_sem) then sentence
+    else
+      let stem =
+        let n = String.length sentence in
+        if n > 0 && sentence.[n - 1] = '.' then String.sub sentence 0 (n - 1) else sentence
+      in
+      sprintf "%s, on the pinned %s host (see the family note above)." stem
+        (match host with Little -> "little-endian" | Big -> "big-endian")
+  in
+  bp b "%s\n\n" sentence;
   (match i.i_defined with
    | CTrue ->
      bp b
@@ -714,7 +727,7 @@ let render (file : string) (sp : spec) : string =
     (fun (f : family) ->
       let insts = List.filter (fun i -> i.i_family = f.f_name) sp.s_instances in
       family_intro b sp f insts;
-      List.iter (fun i -> instance_section b f i) insts)
+      List.iter (fun i -> instance_section b sp.s_host f i) insts)
     sp.s_families;
   encoding_summary b sp;
   excluded_section b sp;

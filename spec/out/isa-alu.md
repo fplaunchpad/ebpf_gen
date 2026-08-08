@@ -1428,7 +1428,7 @@ emits as a single `match`):
 
 **Operation** — `dst = (dst mod 2^16)`
 
-`dst` is set to the low 16 bits of the destination value.
+`dst` is set to the low 16 bits of the destination value, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1445,7 +1445,7 @@ emits as a single `match`):
 
 **Operation** — `dst = (dst mod 2^32)`
 
-`dst` is set to the low 32 bits of the destination value.
+`dst` is set to the low 32 bits of the destination value, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1462,7 +1462,7 @@ emits as a single `match`):
 
 **Operation** — `dst = (dst mod 2^64)`
 
-`dst` is set to the low 64 bits of the destination value.
+`dst` is set to the low 64 bits of the destination value, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1479,7 +1479,7 @@ emits as a single `match`):
 
 **Operation** — `dst = bswap(2, dst)`
 
-`dst` is set to the low 2 bytes of the destination value in reverse order.
+`dst` is set to the low 2 bytes of the destination value in reverse order, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1500,7 +1500,7 @@ emits as a single `match`):
 
 **Operation** — `dst = bswap(4, dst)`
 
-`dst` is set to the low 4 bytes of the destination value in reverse order.
+`dst` is set to the low 4 bytes of the destination value in reverse order, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1521,7 +1521,7 @@ emits as a single `match`):
 
 **Operation** — `dst = bswap(8, dst)`
 
-`dst` is set to the low 8 bytes of the destination value in reverse order.
+`dst` is set to the low 8 bytes of the destination value in reverse order, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1542,7 +1542,7 @@ emits as a single `match`):
 
 **Operation** — `dst = bswap(2, dst)`
 
-`dst` is set to the low 2 bytes of the destination value in reverse order.
+`dst` is set to the low 2 bytes of the destination value in reverse order, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1563,7 +1563,7 @@ emits as a single `match`):
 
 **Operation** — `dst = bswap(4, dst)`
 
-`dst` is set to the low 4 bytes of the destination value in reverse order.
+`dst` is set to the low 4 bytes of the destination value in reverse order, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
@@ -1584,7 +1584,7 @@ emits as a single `match`):
 
 **Operation** — `dst = bswap(8, dst)`
 
-`dst` is set to the low 8 bytes of the destination value in reverse order.
+`dst` is set to the low 8 bytes of the destination value in reverse order, on the pinned little-endian host (see the family note above).
 
 **Definedness** — `defined: true`. No precondition: the operation above is total over all operand values, in both checker modes.
 
