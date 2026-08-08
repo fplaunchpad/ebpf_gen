@@ -21,21 +21,40 @@ let reg_num (r: reg) : n:nat{n < 16} =
   | R0 -> 0 | R1 -> 1 | R2 -> 2 | R3 -> 3 | R4 -> 4 | R5 -> 5
   | R6 -> 6 | R7 -> 7 | R8 -> 8 | R9 -> 9 | R10 -> 10
 
-let cls (w: width) : n:nat{n <= 0x07} = match w with | W32 -> 0x04 | W64 -> 0x07
+(* BEGIN GENERATED serialize-opcode --- specgen; edits here are overwritten *)
+(* GENERATED from spec/ebpf_alu.kspec by specgen — do not edit *)
+(* spec ebpf_alu v1, host little-endian *)
+
+let cls (w: width) : n:nat{n <= 0x07} =
+  match w with
+  | W32 -> 0x04
+  | W64 -> 0x07
+
+let src_bit (o: operand) : n:nat{n <= 0x08} =
+  match o with
+  | OpReg _ -> 0x08
+  | OpImm _ -> 0x00
 
 let op_bits (op: alu_op) : n:nat{n <= 0xc0} =
   match op with
-  | ADD -> 0x00 | SUB -> 0x10 | MUL -> 0x20 | DIV -> 0x30 | SDIV -> 0x30
-  | OR  -> 0x40 | AND -> 0x50 | LSH -> 0x60 | RSH -> 0x70
-  | MOD -> 0x90 | SMOD -> 0x90 | XOR -> 0xa0 | ARSH -> 0xc0
+  | ADD -> 0x00
+  | SUB -> 0x10
+  | MUL -> 0x20
+  | DIV | SDIV -> 0x30
+  | MOD | SMOD -> 0x90
+  | AND -> 0x50
+  | OR -> 0x40
+  | XOR -> 0xa0
+  | LSH -> 0x60
+  | RSH -> 0x70
+  | ARSH -> 0xc0
 
 let op_off (op: alu_op) : nat =
   match op with
   | SDIV | SMOD -> 1
   | _ -> 0
 
-let src_bit (o: operand) : n:nat{n <= 0x08} =
-  match o with | OpReg _ -> 0x08 | OpImm _ -> 0x00
+(* END GENERATED serialize-opcode *)
 
 (* k little-endian bytes of v *)
 let rec le_bytes (k: nat) (v: nat) : l:list byte{length l = k} =
@@ -56,11 +75,23 @@ let op_src (o: operand) : n:nat{n < 16} =
   | OpImm _ -> 0
   | OpReg r -> reg_num r
 
-let swap_imm (sz: swap_sz) : nat =
-  match sz with | SW16 -> 16 | SW32 -> 32 | SW64 -> 64
+(* BEGIN GENERATED serialize-fields --- specgen; edits here are overwritten *)
+(* GENERATED from spec/ebpf_alu.kspec by specgen — do not edit *)
+(* spec ebpf_alu v1, host little-endian *)
 
 let movsx_off (sz: movsx_sz) : nat =
-  match sz with | SX8 -> 8 | SX16 -> 16 | SX32 -> 32
+  match sz with
+  | SX8  -> 8
+  | SX16 -> 16
+  | SX32 -> 32
+
+let swap_imm (sz: swap_sz) : nat =
+  match sz with
+  | SW16 -> 16
+  | SW32 -> 32
+  | SW64 -> 64
+
+(* END GENERATED serialize-fields *)
 
 let encode_insn (i: insn) : list byte =
   match i with

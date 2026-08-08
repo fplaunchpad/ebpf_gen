@@ -4,13 +4,16 @@
 #   1. the spec passes all meta-checks
 #   2. the generated opcodes match Ebpf.Serialize's own anchors
 #   3. specgen's built-in Ebpf.Ast table has not drifted from Ebpf.Ast.fst
-#   4. every negative fixture is REJECTED, with its expected diagnostic and
+#   4. the GENERATED regions of the committed F* files are exactly what the
+#      spec produces today (MS2 fidelity / promote is idempotent)
+#   5. every negative fixture is REJECTED, with its expected diagnostic and
 #      a file:line:col position
 set -u
 
 cd "$(dirname "$0")/.." || exit 1          # spec/
 SPECGEN=./specgen/_build/default/bin/specgen.exe
-EBPF_AST=${EBPF_AST:-../fstar/Ebpf.Ast.fst}
+FSTARDIR=${FSTARDIR:-../fstar}
+EBPF_AST=${EBPF_AST:-$FSTARDIR/Ebpf.Ast.fst}
 
 pass=0
 fail=0
@@ -63,6 +66,28 @@ if [ -f "$EBPF_AST" ]; then
 else
   bad "astcheck: $EBPF_AST not found (set EBPF_AST=<path to Ebpf.Ast.fst>)"
 fi
+
+echo "== generated F* fidelity (spec -> $FSTARDIR) =="
+# `specgen emit` copies the hand-written frame through verbatim and rewrites
+# only the BEGIN/END GENERATED regions, so a difference here means exactly
+# one thing: the committed F* no longer matches the spec.  Run
+# `make -C spec promote` to fix it.
+tmp=$(mktemp -d)
+if out=$("$SPECGEN" emit ebpf_alu.kspec "$FSTARDIR" "$tmp" 2>&1); then
+  ok "specgen emit ebpf_alu.kspec"
+  for f in Ebpf.Semantics.fst Ebpf.Serialize.fst; do
+    if diff -u "$FSTARDIR/$f" "$tmp/$f" > "$tmp/$f.diff" 2>&1; then
+      ok "$f is up to date with the spec"
+    else
+      bad "$f has DRIFTED from ebpf_alu.kspec (run 'make -C spec promote')"
+      sed 's/^/        /' "$tmp/$f.diff" | head -40
+    fi
+  done
+else
+  echo "$out" | sed 's/^/  /'
+  bad "specgen emit ebpf_alu.kspec"
+fi
+rm -rf "$tmp"
 
 echo "== negative fixtures =="
 for f in tests/neg/*.kspec; do

@@ -54,8 +54,11 @@ let res64 (w: width) (x: int{fits (bits w) x}) : U64.t =
 let updr (rf: regfile) (r: reg) (v: U64.t) : regfile =
   fun r' -> if r' = r then Some v else rf r'
 
-let alu_semn (n: pos) (op: alu_op)
-             (d: int{fits n d}) (s: int{fits n s})
+(* BEGIN GENERATED semantics-alu --- specgen; edits here are overwritten *)
+(* GENERATED from spec/ebpf_alu.kspec by specgen — do not edit *)
+(* spec ebpf_alu v1, host little-endian *)
+
+let alu_semn (n: pos) (op: alu_op) (d: int{fits n d}) (s: int{fits n s})
   : r:int{fits n r} =
   match op with
   | ADD  -> wrap n (d + s)
@@ -66,29 +69,53 @@ let alu_semn (n: pos) (op: alu_op)
   | MOD  -> if s = 0 then d else wrap n (d % s)
   | SMOD -> if s = 0 then d else wrap n (trunc_mod (sval n d) (sval n s))
   | AND  -> UInt.logand #n d s
-  | OR   -> UInt.logor  #n d s
+  | OR   -> UInt.logor #n d s
   | XOR  -> UInt.logxor #n d s
   | LSH  -> wrap n (d * pow2 (s % n))
   | RSH  -> wrap n (d / pow2 (s % n))
   | ARSH -> wrap n (sval n d / pow2 (s % n))
+
+(* END GENERATED semantics-alu *)
 
 let alu_sem (w: width) (op: alu_op)
             (d: int{fits (bits w) d}) (s: int{fits (bits w) s})
   : r:int{fits (bits w) r} =
   alu_semn (bits w) op d s
 
+(* BEGIN GENERATED semantics-tables --- specgen; edits here are overwritten *)
+(* GENERATED from spec/ebpf_alu.kspec by specgen — do not edit *)
+(* spec ebpf_alu v1, host little-endian *)
+
 let movsx_bits (sz: movsx_sz) : n:pos{n <= 32} =
-  match sz with | SX8 -> 8 | SX16 -> 16 | SX32 -> 32
+  match sz with
+  | SX8  -> 8
+  | SX16 -> 16
+  | SX32 -> 32
 
 let swap_bits (sz: swap_sz) : n:pos{n = 16 \/ n = 32 \/ n = 64} =
-  match sz with | SW16 -> 16 | SW32 -> 32 | SW64 -> 64
+  match sz with
+  | SW16 -> 16
+  | SW32 -> 32
+  | SW64 -> 64
 
 let swap_sem (k: swap_kind) (sz: swap_sz) (d: int{fits 64 d})
   : r:int{fits (swap_bits sz) r} =
   match k with
-  | ToLE  -> low (swap_bits sz) d               (* LE host: truncate *)
+  | ToLE  -> low (swap_bits sz) d
   | ToBE  -> bswap (swap_bits sz / 8) d
   | Bswap -> bswap (swap_bits sz / 8) d
+
+unfold let neg_semn (n: pos) (d: int{fits n d}) : r:int{fits n r} =
+  wrap n (0 - d)
+
+unfold let mov_semn (n: pos) (s: int{fits n s}) : r:int{fits n r} =
+  s
+
+unfold let movsx_semn (n: pos) (f: pos{f < n}) (s: int{fits n s})
+  : r:int{fits n r} =
+  sext f n s
+
+(* END GENERATED semantics-tables *)
 
 (* Two observation levels:
    - Total: the ISA semantics — div/0 and oversized shift amounts are
@@ -98,11 +125,17 @@ let swap_sem (k: swap_kind) (sz: swap_sz) (d: int{fits 64 d})
      exactly the extra guarantee over kernel-faithful mode. *)
 type semantics = | Total | Defensive
 
+(* BEGIN GENERATED semantics-defined --- specgen; edits here are overwritten *)
+(* GENERATED from spec/ebpf_alu.kspec by specgen — do not edit *)
+(* spec ebpf_alu v1, host little-endian *)
+
 let alu_defined (n: pos) (op: alu_op) (s: int{fits n s}) : bool =
   match op with
   | DIV | SDIV | MOD | SMOD -> s <> 0
   | LSH | RSH | ARSH -> s < n
   | _ -> true
+
+(* END GENERATED semantics-defined *)
 
 (* single-instruction step; None = stuck (unsafe). Exit is handled by run. *)
 let stepx (sm: semantics) (rf: regfile) (i: insn) : option regfile =
@@ -116,18 +149,18 @@ let stepx (sm: semantics) (rf: regfile) (i: insn) : option regfile =
      | _, _ -> None)
   | Neg w dst ->
     (match rf dst with
-     | Some dv -> Some (updr rf dst (res64 w (wrap (bits w) (0 - regbits w dv))))
+     | Some dv -> Some (updr rf dst (res64 w (neg_semn (bits w) (regbits w dv))))
      | None -> None)
   | Mov w dst src ->
     (match opbits rf w src with
-     | Some s -> Some (updr rf dst (res64 w s))
+     | Some s -> Some (updr rf dst (res64 w (mov_semn (bits w) s)))
      | None -> None)
   | MovSX w sz dst src ->
     (match rf src with
      | Some sv_ ->
        let f = movsx_bits sz in
-       if f <= bits w
-       then Some (updr rf dst (res64 w (sext f (bits w) (regbits w sv_))))
+       if f < bits w
+       then Some (updr rf dst (res64 w (movsx_semn (bits w) f (regbits w sv_))))
        else None                        (* (W32, SX32) is not a valid insn *)
      | None -> None)
   | Swap k sz dst ->
