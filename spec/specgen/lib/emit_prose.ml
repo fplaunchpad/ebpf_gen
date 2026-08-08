@@ -600,9 +600,8 @@ let encoding_summary b (sp : spec) =
   bp b "## 3. Encoding summary\n\n";
   bp b
     "Every instance of the fragment, in generation order. `opcode` is the first byte \
-     (`cls + opc + sbit`); `*` marks a field carried by the instruction's operands. K8 \
-     (encoding disjointness) has checked that no two rows below can decode to the same \
-     bytes.\n\n";
+     (`cls + opc + sbit`); `*` marks a field the spec does not fix (§1.6). K8 (encoding \
+     disjointness) has checked that no two rows below can decode to the same bytes.\n\n";
   bp b "| id | mnemonic | opcode | cls | opc | sbit | off | imm |\n|---|---|---|---|---|---|---|---|\n";
   List.iter
     (fun (i : instance) ->

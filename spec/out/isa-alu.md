@@ -1598,7 +1598,7 @@ emits as a single `match`):
 
 ## 3. Encoding summary
 
-Every instance of the fragment, in generation order. `opcode` is the first byte (`cls + opc + sbit`); `*` marks a field carried by the instruction's operands. K8 (encoding disjointness) has checked that no two rows below can decode to the same bytes.
+Every instance of the fragment, in generation order. `opcode` is the first byte (`cls + opc + sbit`); `*` marks a field the spec does not fix (§1.6). K8 (encoding disjointness) has checked that no two rows below can decode to the same bytes.
 
 | id | mnemonic | opcode | cls | opc | sbit | off | imm |
 |---|---|---|---|---|---|---|---|
