@@ -41,13 +41,13 @@ anchor() {         # id  expected-opcode  what
   if [ "$got" = "opcode=$2" ]; then ok "$1 = $2 ($3)"
   else bad "$1: expected opcode=$2, got ${got:-none} ($3)"; fi
 }
-anchor alu/ADD/W64/reg     0x0f "Serialize.fst:110 add64 r1,r2 = 0f"
-anchor mov/MOV/W64/imm     0xb7 "Serialize.fst:105 mov64 r0,0 = b7"
+anchor alu/ADD/W64/reg     0x0f "Serialize assert_norm: add64 r1,r2 = 0f"
+anchor mov/MOV/W64/imm     0xb7 "Serialize assert_norm: mov64 r0,0 = b7"
 anchor alu/SDIV/W64/reg    0x3f "sdiv64 = div64 opcode with off=1"
 anchor movsx/MOVSX/W64/SX8 0xbf "0xb0 + 0x08 + cls W64"
-anchor swap/ToLE/SW16      0xd4 "Serialize.fst:75 0xd0 + 0x04"
-anchor swap/ToBE/SW64      0xdc "Serialize.fst:76 0xd0 + 0x08 + 0x04"
-anchor swap/Bswap/SW32     0xd7 "Serialize.fst:77 0xd0 + 0x07"
+anchor swap/ToLE/SW16      0xd4 "Serialize encode_insn Swap ToLE: 0xd0 + 0x04"
+anchor swap/ToBE/SW64      0xdc "Serialize encode_insn Swap ToBE: 0xd0 + 0x08 + 0x04"
+anchor swap/Bswap/SW32     0xd7 "Serialize encode_insn Swap Bswap: 0xd0 + 0x07"
 
 echo "== IL: family-level encoding spellings (what MS3 reads) =="
 spell() {          # family  expected-spelling
