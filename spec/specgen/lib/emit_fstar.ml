@@ -37,10 +37,11 @@ let width_table_name : (string * (string * string)) list =
   [ ("movsx_sz", ("movsx_bits", "sz"));
     ("swap_sz", ("swap_bits", "sz")) ]
 
-(* encoding tables generated from an enum's `enc=` attributes.
-   `operand` is absent: its table is `Ebpf.Serialize.src_bit` (MS3). *)
-let enc_enum_name : (string * (string * string)) list =
-  [ ("width", ("cls", "w")) ]
+(* encoding tables generated from an enum's `enc=` attributes:
+   enum -> (F* function, parameter name, the encoding field it fills) *)
+let enc_enum_name : (string * (string * string * string)) list =
+  [ ("width", ("cls", "w", "cls"));
+    ("operand", ("src_bit", "o", "sbit")) ]
 
 (* encoding tables indexed by a family's KEY enum: one value per table row *)
 let enc_key_name : ((string * string) * string) list =
@@ -249,14 +250,46 @@ let width_env sp (f : family) =
           | Some (fn, param) -> Some (v, sprintf "%s %s" fn param)))
     f.f_widths
 
-(* refinements a width parameter carries, from the recorded obligations.
-   `OLe (a, b)` (sext's source <= target) lands on whichever of the two is
-   declared LAST, so it can mention the other. *)
-let width_refinements sp (f : family) (order : string list) (v : string) =
-  let idx x =
-    let rec go i = function [] -> -1 | y :: t -> if y = x then i else go (i + 1) t in
-    go 0 order
-  in
+(* the width variables a condition mentions (K2 guarantees `valid` mentions
+   width variables and nothing else) *)
+let rec cond_wvars (c : cond) : string list =
+  match c with
+  | CTrue -> []
+  | CCmp (_, a, b, _) -> expr_wvars a @ expr_wvars b
+  | CAnd (a, b) | COr (a, b) -> cond_wvars a @ cond_wvars b
+  | CNot a -> cond_wvars a
+
+and expr_wvars (e : expr) : string list =
+  match e with
+  | ELit _ | EVar _ -> []
+  | EWidth (w, _) -> wexp_wvars w
+  | EArith (_, a, b, _) -> expr_wvars a @ expr_wvars b
+  | EComb (_, ws, es, _) ->
+    List.concat_map wexp_wvars ws @ List.concat_map expr_wvars es
+  | EIf (c, a, b, _) -> cond_wvars c @ expr_wvars a @ expr_wvars b
+
+and wexp_wvars (w : wexp) : string list =
+  match w with
+  | WLit _ -> []
+  | WVar v -> [ v ]
+  | WBin (_, a, b) -> wexp_wvars a @ wexp_wvars b
+
+(* Refinements a width parameter carries.
+
+   A family that declares `valid` (MOVSX's `f < n`) gets THAT as its width
+   refinement: the generated function is then defined exactly on the axis
+   points the spec calls real instructions, which is DESIGN section 8 / D1
+   stated once, in the spec, instead of twice.  It also matters mechanically -
+   `stepx` guards with the same predicate, so the call site discharges the
+   refinement syntactically rather than through a subtyping coercion.  With
+   the weaker `f <= n` refinement the guard `f < bits w` is strictly stronger
+   than the parameter's type, and re-verifying Ebpf.Annot then costs >31min
+   instead of ~4min (measured).
+
+   Otherwise the refinement is the recorded obligation: `OLe (a, b)` (sext's
+   source <= target) lands on whichever of the two is declared LAST, so it
+   can mention the other. *)
+let width_refinements_obl sp (f : family) idx (v : string) =
   let seen = ref [] in
   List.filter_map
     (function
@@ -271,6 +304,21 @@ let width_refinements sp (f : family) (order : string list) (v : string) =
         | _ -> None)
       | _ -> None)
     (fam_obligs sp f)
+
+let width_refinements sp (f : family) (order : string list) (v : string) =
+  let idx x =
+    let rec go i = function [] -> -1 | y :: t -> if y = x then i else go (i + 1) t in
+    go 0 order
+  in
+  match f.f_valid with
+  | CTrue -> width_refinements_obl sp f idx v
+  | c -> (
+    match cond_wvars c with
+    | [] -> width_refinements_obl sp f idx v
+    | v0 :: vs ->
+      (* the validity predicate constrains the last width var it mentions *)
+      let last = List.fold_left (fun b x -> if idx x > idx b then x else b) v0 vs in
+      if last = v then [ pp_cond [] 0 c ] else [])
 
 (* Parameter order = the order of the originating arguments in the AST
    constructor (`f_ctor_args`): `Alu(w, op, ..)` gives `alu_semn (n) (op)`,
@@ -331,9 +379,12 @@ let sem_fun sp (f : family) : string option =
       | [ e ] -> "  " ^ pp_expr env 0 e.e_sem ^ "\n"
       | _ -> failwith (sprintf "emit: family %s has no key but %d entries" f.f_name
                          (List.length f.f_entries)))
-    | Some (k, _) ->
+    | Some (k, ken) ->
       pp_match k
-        (List.map (fun (e : entry) -> ([ e.e_name ], pp_expr env 0 e.e_sem)) f.f_entries)
+        (List.map
+           (fun (e : entry) ->
+             ([ Astref.ast_pattern ken e.e_name ], pp_expr env 0 e.e_sem))
+           f.f_entries)
   in
   Some (sprintf "%s\n%s" (pp_sig sigline res) body)
 
@@ -351,8 +402,12 @@ let defined_fun sp (f : family) : string option =
         f.f_sem.sg_vals
     in
     let sigline = String.concat " " ((("let " ^ name) :: heads) @ vals) in
+    let ken = match f.f_key with Some (_, en) -> en | None -> "" in
     let rows =
-      List.map (fun (e : entry) -> (e.e_name, pp_cond env 0 e.e_defined)) f.f_entries
+      List.map
+        (fun (e : entry) ->
+          (Astref.ast_pattern ken e.e_name, pp_cond env 0 e.e_defined))
+        f.f_entries
     in
     (* DESIGN section 2.5: a `-` cell elaborates to `true`; those rows become the
        `| _ -> true` default, which is how `alu_defined` is written today. *)
@@ -393,7 +448,10 @@ let width_table sp (en : enum) (fn : string) (param : string) =
   sprintf "%s\n%s"
     (pp_sig (sprintf "let %s (%s: %s)" fn param en.en_name) (sprintf "n:pos{%s}" refn))
     (pp_match param
-       (List.map (fun c -> ([ c.c_name ], string_of_int (case_bits en c))) en.en_cases))
+       (List.map
+          (fun c ->
+            ([ Astref.ast_pattern en.en_name c.c_name ], string_of_int (case_bits en c)))
+          en.en_cases))
 
 (* ================================================================== *)
 (* 5. Ebpf.Serialize                                                   *)
@@ -408,15 +466,16 @@ let enc_result field vals =
 
 let enc_show field n = if opcode_field field then byte_lit n else string_of_int n
 
-(* a table over an enum's `enc=` attributes (`cls`) *)
-let enc_enum_table sp (en : enum) (fn : string) (param : string) =
-  let rows = List.map (fun c -> (c.c_name, case_enc en c)) en.en_cases in
+(* a table over an enum's `enc=` attributes (`cls`, `src_bit`) *)
+let enc_enum_table sp (en : enum) (fn : string) (param : string) (field : string) =
+  let rows =
+    List.map (fun c -> (Astref.ast_pattern en.en_name c.c_name, case_enc en c)) en.en_cases
+  in
   sprintf "%s\n%s"
     (pp_sig
        (sprintf "let %s (%s: %s)" fn param en.en_name)
-       (enc_result "cls" (List.map snd rows)))
-    (pp_match param
-       (List.map (fun (k, v) -> ([ k ], enc_show "cls" v)) rows))
+       (enc_result field (List.map snd rows)))
+    (pp_match param (List.map (fun (k, v) -> ([ k ], enc_show field v)) rows))
 
 (* a table over a family's KEY enum: the per-row value of one encoding
    field (`op_bits` = the `opc` column, `op_off` = the `off` column) *)
@@ -428,7 +487,7 @@ let enc_key_table (f : family) (field : string) (fn : string) =
       List.filter_map
         (fun (e : entry) ->
           match List.assoc_opt field e.e_enc_row with
-          | Some (FSLit n) -> Some (e.e_name, n)
+          | Some (FSLit n) -> Some (Astref.ast_pattern en e.e_name, n)
           | _ -> None)
         f.f_entries
     in
@@ -481,7 +540,8 @@ let enc_width_table sp (f : family) (field : string) (fn : string) =
               (enc_result field (List.map (fun c -> case_bits en c) en.en_cases)))
            (pp_match param
               (List.map
-                 (fun c -> ([ c.c_name ], enc_show field (case_bits en c)))
+                 (fun c ->
+                   ([ Astref.ast_pattern enm c.c_name ], enc_show field (case_bits en c)))
                  en.en_cases))))
   | _ -> None
 
@@ -537,7 +597,7 @@ let regions (sp : spec) (src : string) : (string * string) list =
       (fun (en : enum) ->
         match List.assoc_opt en.en_name enc_enum_name with
         | None -> None
-        | Some (fn, param) -> Some (enc_enum_table sp en fn param))
+        | Some (fn, param, field) -> Some (enc_enum_table sp en fn param field))
       sp.s_enums
   in
   let enc_key_tables =

@@ -65,6 +65,31 @@ let find_ctor n = List.find_opt (fun c -> c.ct_name = n) ctors
 
 let enum_of_argkind = function KEnum n -> Some n | _ -> None
 
+(* Enums whose Ebpf.Ast constructors CARRY A VALUE, so a match pattern needs
+   an argument: `OpReg _`, not `OpReg`.  (fstar/Ebpf.Ast.fst:28-30 - the
+   `operand` axis is the only one in this fragment.) *)
+let valued = [ "operand" ]
+
+(* The F* match pattern for a spec case name: its Ebpf.Ast constructor
+   (the .kspec spells the `operand` axis `reg`/`imm` because it is a form
+   axis, but F* matches on `OpReg`/`OpImm`), plus `_` when that constructor
+   carries a value.  The F* backend prints patterns through here so the
+   spec-vs-AST spelling correspondence stays in this one file. *)
+let ast_pattern (en : string) (case : string) : string =
+  let ctor =
+    match find_enum en with
+    | None -> case
+    | Some e ->
+      let rec go spec ast =
+        match (spec, ast) with
+        | s :: _, a :: _ when s = case -> a
+        | _ :: st, _ :: at -> go st at
+        | _ -> case
+      in
+      go e.re_spec_cases e.re_ast_cases
+  in
+  if List.mem en valued then ctor ^ " _" else ctor
+
 let ctor_list_str () =
   "[" ^ String.concat "; " (List.map (fun c -> c.ct_name) ctors) ^ "]"
 
