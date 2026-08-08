@@ -98,7 +98,8 @@ Worth recording because it is the part that transfers to other DSLs:
 Each finding names the cause in the DSL/IL and a candidate fix. P1–P6 are
 about wording; P7–P9 are places the **IL does not carry the information**
 needed for faithful prose, which is the part that should feed back into the
-`.kspec` grammar.
+`.kspec` grammar; P13 is a template that is sound for this fragment but not
+for every expression the grammar admits.
 
 **P1 — shifts are rendered as multiply/divide by a power of two.** RFC:
 `dst <<= (src & mask)`. Generated: "the product of the destination value and
@@ -242,6 +243,21 @@ excellent at depth 2 (ADD, MOV, MOVSX), acceptable at depth 3 (LSH, ARSH) and
 poor at depth 4 (SDIV, SMOD). Mitigated by bracketing any sub-phrase that
 already contains a comma, and by printing the raw `sem` cell in every section
 so the reader always has the short form; not solved.
+
+**P13 — one template is correct for this fragment, not in general.** `/` on a
+possibly-negative dividend renders as "…, rounded toward negative infinity".
+F*'s `/` on `int` is Euclidean, which coincides with rounding toward −∞ only
+when the **divisor is positive**; for a negative divisor Euclidean division
+rounds the other way (it keeps the remainder non-negative). Every division in
+the current fragment either has a bit-pattern dividend (unsigned) or divides
+by `pow2 (s % n)`, which is always positive, so the rendering is correct for
+all 72 instructions today — but it would silently become wrong if a future
+`sem` cell divided by something that can be negative. Recorded rather than
+fixed: the honest fix is to make the template say "Euclidean quotient" and
+lose the reading that makes ARSH recognisable as an arithmetic shift, or to
+extend the sign analysis to the divisor as well. Found by re-reading the
+templates against `Ebpf.Int.fst`, not by a test — which is the point of §4
+below.
 
 ## 4. What is machine-checked, and what is not
 
