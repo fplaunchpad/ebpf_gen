@@ -45,6 +45,7 @@ column, so this table *is* the renderer; it cannot describe it wrongly.
 | `(x / y)` | `(x / y)` | the unsigned quotient of x divided by y |
 | `(sval N (x) / y)` | `(signedN(x) / y)` | the quotient of the signed (two's-complement) interpretation of x as an N-bit value divided by y, rounded toward negative infinity |
 | `(x % y)` | `(x % y)` | the unsigned remainder of x divided by y |
+| `(sval N (x) % y)` | `(signedN(x) % y)` | the Euclidean remainder of the signed (two's-complement) interpretation of x as an N-bit value divided by y |
 | `wrap N (x)` | `(x mod 2^N)` | x, truncated to N bits |
 | `wrap N (sval N (x))` | `(signedN(x) mod 2^N)` | the signed (two's-complement) interpretation of x as an N-bit value, reduced modulo 2^N (two's-complement wrap-around) |
 | `low N (x)` | `(x mod 2^N)` | the low N bits of x |
@@ -83,7 +84,7 @@ The write-back direction *is* visible: a result declared `bits n` stored into a 
 
 ### 1.5 Definedness and the two checker modes
 
-Each instruction carries a `defined` condition — the **strict-mode** precondition. In **kernel mode** the verifier accepts the instruction without proving it, and the `Operation` line is the behaviour in every case (this is why division by zero has a defined result). In strict mode the checker must prove the condition; programs that pass are safe under the defensive semantics, where the excluded cases are stuck states. See `fstar/CONSTRAINTS.md` (modes, C5–C9).
+Each instruction carries a `defined` condition — the **strict-mode precondition** that a clean-slate checker must prove. That condition is a property of the instruction, and it is all the spec source states. What a *checker* does with an instruction whose precondition it cannot prove is policy that lives outside this document, and it is **not uniform**: the Linux verifier (and the kernel-faithful mode) accepts a *register* divisor that may be zero and a *register* shift amount that may exceed the width — the ISA defines the result, which is the `Operation` line — but **rejects** a zero *immediate* divisor and an out-of-range *immediate* shift outright; strict mode requires the proof in every case, and programs that pass it are safe under the defensive semantics, where the excluded cases are stuck states. See `fstar/CONSTRAINTS.md` C4 and C7 (immediate, both modes) against C5, C6, C8 and C9 (register). Whichever mode is in force, the `Operation` line is the behaviour when the instruction does execute.
 
 ### 1.6 Encoding fields written `*`
 
@@ -337,7 +338,7 @@ emits as a single `match`):
 
 If the source register value is zero, `dst` is set to 0; otherwise `dst` is set to the unsigned quotient of the destination value divided by the source register value, truncated to 32 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -358,7 +359,7 @@ If the source register value is zero, `dst` is set to 0; otherwise `dst` is set 
 
 If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to the unsigned quotient of the destination value divided by the immediate value, truncated to 32 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -379,7 +380,7 @@ If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to the
 
 If the source register value is zero, `dst` is set to 0; otherwise `dst` is set to the unsigned quotient of the destination value divided by the source register value, truncated to 64 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -400,7 +401,7 @@ If the source register value is zero, `dst` is set to 0; otherwise `dst` is set 
 
 If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to the unsigned quotient of the destination value divided by the immediate value, truncated to 64 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -421,7 +422,7 @@ If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to the
 
 If the source register value is zero, `dst` is set to 0; otherwise `dst` is set to (the signed (two's-complement) interpretation of the destination value as a 32-bit value divided by the signed (two's-complement) interpretation of the source register value as a 32-bit value, truncated toward zero), reduced modulo 2^32 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -442,7 +443,7 @@ If the source register value is zero, `dst` is set to 0; otherwise `dst` is set 
 
 If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to (the signed (two's-complement) interpretation of the destination value as a 32-bit value divided by the signed (two's-complement) interpretation of the immediate value as a 32-bit value, truncated toward zero), reduced modulo 2^32 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -463,7 +464,7 @@ If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to (th
 
 If the source register value is zero, `dst` is set to 0; otherwise `dst` is set to (the signed (two's-complement) interpretation of the destination value as a 64-bit value divided by the signed (two's-complement) interpretation of the source register value as a 64-bit value, truncated toward zero), reduced modulo 2^64 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -484,7 +485,7 @@ If the source register value is zero, `dst` is set to 0; otherwise `dst` is set 
 
 If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to (the signed (two's-complement) interpretation of the destination value as a 64-bit value divided by the signed (two's-complement) interpretation of the immediate value as a 64-bit value, truncated toward zero), reduced modulo 2^64 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -505,7 +506,7 @@ If the immediate value is zero, `dst` is set to 0; otherwise `dst` is set to (th
 
 If the source register value is zero, `dst` is set to the destination value; otherwise `dst` is set to the unsigned remainder of the destination value divided by the source register value, truncated to 32 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -526,7 +527,7 @@ If the source register value is zero, `dst` is set to the destination value; oth
 
 If the immediate value is zero, `dst` is set to the destination value; otherwise `dst` is set to the unsigned remainder of the destination value divided by the immediate value, truncated to 32 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -547,7 +548,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 If the source register value is zero, `dst` is set to the destination value; otherwise `dst` is set to the unsigned remainder of the destination value divided by the source register value, truncated to 64 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -568,7 +569,7 @@ If the source register value is zero, `dst` is set to the destination value; oth
 
 If the immediate value is zero, `dst` is set to the destination value; otherwise `dst` is set to the unsigned remainder of the destination value divided by the immediate value, truncated to 64 bits.
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -589,7 +590,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 If the source register value is zero, `dst` is set to the destination value; otherwise `dst` is set to the remainder of the signed (two's-complement) interpretation of the destination value as a 32-bit value divided by the signed (two's-complement) interpretation of the source register value as a 32-bit value with the quotient truncated toward zero (the remainder takes the sign of the dividend), reduced modulo 2^32 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -610,7 +611,7 @@ If the source register value is zero, `dst` is set to the destination value; oth
 
 If the immediate value is zero, `dst` is set to the destination value; otherwise `dst` is set to the remainder of the signed (two's-complement) interpretation of the destination value as a 32-bit value divided by the signed (two's-complement) interpretation of the immediate value as a 32-bit value with the quotient truncated toward zero (the remainder takes the sign of the dividend), reduced modulo 2^32 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -631,7 +632,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 If the source register value is zero, `dst` is set to the destination value; otherwise `dst` is set to the remainder of the signed (two's-complement) interpretation of the destination value as a 64-bit value divided by the signed (two's-complement) interpretation of the source register value as a 64-bit value with the quotient truncated toward zero (the remainder takes the sign of the dividend), reduced modulo 2^64 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the source register value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the source register value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -652,7 +653,7 @@ If the source register value is zero, `dst` is set to the destination value; oth
 
 If the immediate value is zero, `dst` is set to the destination value; otherwise `dst` is set to the remainder of the signed (two's-complement) interpretation of the destination value as a 64-bit value divided by the signed (two's-complement) interpretation of the immediate value as a 64-bit value with the quotient truncated toward zero (the remainder takes the sign of the dividend), reduced modulo 2^64 (two's-complement wrap-around).
 
-**Definedness** — `defined: s <> 0`. Strict mode requires a proof that the immediate value is nonzero; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s <> 0`. This is the strict-mode precondition: the immediate value is nonzero. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -877,7 +878,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the product of the destination value and 2 raised to the power (the unsigned remainder of the source register value divided by 32), truncated to 32 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the source register value is less than 32; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the source register value is less than 32. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -899,7 +900,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the product of the destination value and 2 raised to the power (the unsigned remainder of the immediate value divided by 32), truncated to 32 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the immediate value is less than 32; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the immediate value is less than 32. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -921,7 +922,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the product of the destination value and 2 raised to the power (the unsigned remainder of the source register value divided by 64), truncated to 64 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the source register value is less than 64; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the source register value is less than 64. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -943,7 +944,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the product of the destination value and 2 raised to the power (the unsigned remainder of the immediate value divided by 64), truncated to 64 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the immediate value is less than 64; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the immediate value is less than 64. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -965,7 +966,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the unsigned quotient of the destination value divided by 2 raised to the power (the unsigned remainder of the source register value divided by 32), truncated to 32 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the source register value is less than 32; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the source register value is less than 32. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -988,7 +989,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the unsigned quotient of the destination value divided by 2 raised to the power (the unsigned remainder of the immediate value divided by 32), truncated to 32 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the immediate value is less than 32; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the immediate value is less than 32. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1011,7 +1012,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the unsigned quotient of the destination value divided by 2 raised to the power (the unsigned remainder of the source register value divided by 64), truncated to 64 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the source register value is less than 64; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the source register value is less than 64. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1034,7 +1035,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to the unsigned quotient of the destination value divided by 2 raised to the power (the unsigned remainder of the immediate value divided by 64), truncated to 64 bits.
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the immediate value is less than 64; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the immediate value is less than 64. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1057,7 +1058,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to (the quotient of the signed (two's-complement) interpretation of the destination value as a 32-bit value divided by 2 raised to the power (the unsigned remainder of the source register value divided by 32), rounded toward negative infinity), reduced modulo 2^32 (two's-complement wrap-around).
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the source register value is less than 32; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the source register value is less than 32. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1080,7 +1081,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to (the quotient of the signed (two's-complement) interpretation of the destination value as a 32-bit value divided by 2 raised to the power (the unsigned remainder of the immediate value divided by 32), rounded toward negative infinity), reduced modulo 2^32 (two's-complement wrap-around).
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the immediate value is less than 32; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the immediate value is less than 32. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1103,7 +1104,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to (the quotient of the signed (two's-complement) interpretation of the destination value as a 64-bit value divided by 2 raised to the power (the unsigned remainder of the source register value divided by 64), rounded toward negative infinity), reduced modulo 2^64 (two's-complement wrap-around).
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the source register value is less than 64; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the source register value is less than 64. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1126,7 +1127,7 @@ If the immediate value is zero, `dst` is set to the destination value; otherwise
 
 `dst` is set to (the quotient of the signed (two's-complement) interpretation of the destination value as a 64-bit value divided by 2 raised to the power (the unsigned remainder of the immediate value divided by 64), rounded toward negative infinity), reduced modulo 2^64 (two's-complement wrap-around).
 
-**Definedness** — `defined: s < n`. Strict mode requires a proof that the immediate value is less than 64; kernel mode accepts the instruction without one, and the operation above gives the result in every case.
+**Definedness** — `defined: s < n`. This is the strict-mode precondition: the immediate value is less than 64. The operation above is total regardless — it gives a result for every operand value, including when the condition fails. What a *checker* does with an instruction whose precondition it cannot prove is policy, not semantics: see §1.5.
 
 **Side conditions** (recorded in the IL, discharged on the generated F*):
 
@@ -1407,7 +1408,7 @@ emits as a single `match`):
 - **Semantics signature** — `sem (m; d = dst@64) : bits m`
 - **Definedness signature** — `defined (m)`
 - **Instances** — 9
-- **Host endianness** — the semantics below is stated for a **little-endian** host (`host` in the spec source); on this host the `low` form is a truncation rather than a byte reversal.
+- **Host endianness** — the semantics below is stated for a **little-endian** host (`host` in the spec source). The pin is load-bearing: the `sem` cells of this family are the right ones only for that host.
 - **Cite** — RFC 9669 sec. 4.1 (byte swap); CONSTRAINTS.md C14
 
 Width-generic behaviour, one row per table entry (this is what the F* backend

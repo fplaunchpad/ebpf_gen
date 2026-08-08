@@ -12,8 +12,18 @@
    AST *node kind* (the two rendering tables below, which §1.2 of the output
    prints by running them on sample terms, so the documented table cannot
    drift from the renderer), and (b) fixed scaffolding that says nothing
-   instruction-specific.  Two deliberate exceptions are marked EXCEPTION and
-   listed in spec/PROSE-CHECK.md.
+   instruction-specific.  Deliberate exceptions are marked EXCEPTION below
+   and listed in spec/PROSE-CHECK.md:
+
+     EXCEPTION 1  the assembly stems `le` / `be` / `bswap` (`stem`), which the
+                  IL does not carry;
+     EXCEPTION 2  the fixed scaffolding — §1.1, §1.4, §1.5, §1.6, the section
+                  headings, the write target `dst` (the IL derives `writes`
+                  from the ctor rather than storing it) and the "32-bit
+                  immediate field" in `read_line`.  Scaffolding may say
+                  nothing that is true of one instruction and false of
+                  another; §1.5's mode text is where that rule was broken
+                  once and repaired (PROSE-CHECK P11).
 
    See spec/DESIGN.md §5 ("prose backend") for the contract. *)
 
@@ -140,9 +150,13 @@ and ps_cond ctx = function
   | CCmp (o, a, b, _) ->
     let op = match o with Eq -> "==" | Ne -> "!=" | _ -> cmp_str o in
     sprintf "%s %s %s" (ps ctx a) op (ps ctx b)
-  | CAnd (a, b) -> sprintf "%s && %s" (ps_cond ctx a) (ps_cond ctx b)
+  | CAnd (a, b) -> sprintf "%s && %s" (ps_disj ctx a) (ps_disj ctx b)
   | COr (a, b) -> sprintf "%s || %s" (ps_cond ctx a) (ps_cond ctx b)
   | CNot a -> sprintf "!(%s)" (ps_cond ctx a)
+
+(* a disjunction under a conjunction needs its own parentheses *)
+and ps_disj ctx c =
+  match c with COr _ -> "(" ^ ps_cond ctx c ^ ")" | _ -> ps_cond ctx c
 
 (* ------------------------------------------------------------------ *)
 (* RENDERING TABLE 2 — English                                          *)
@@ -240,11 +254,18 @@ and en_cond ctx = function
       | Ge -> "is at least"
     in
     sprintf "%s %s %s" (en ctx a) op (en ctx b)
-  | CAnd (a, b) -> sprintf "%s and %s" (en_cond ctx a) (en_cond ctx b)
+  | CAnd (a, b) -> sprintf "%s and %s" (en_disj ctx a) (en_disj ctx b)
   | COr (a, b) -> sprintf "%s or %s" (en_cond ctx a) (en_cond ctx b)
   | CNot a -> sprintf "it is not the case that %s" (en_cond ctx a)
 
-(* the whole-instruction sentence: the only place the write target is named *)
+(* "(A or B) and C", not the ambiguous "A or B and C" *)
+and en_disj ctx c =
+  match c with COr _ -> "(" ^ en_cond ctx c ^ ")" | _ -> en_cond ctx c
+
+(* The whole-instruction sentence.  EXCEPTION 2: the write target is passed in
+   by the caller as `dst` — DESIGN §2.4 derives `writes = dst` from the ctor's
+   `dst:reg` argument rather than storing it in the IL, so the backend names
+   it.  A family that wrote something else would need a `writes` field. *)
 let en_top ctx (target : string) e =
   match e with
   | EIf (c, x, y, _) ->
@@ -300,8 +321,8 @@ let entry_ctx (f : family) =
    Ebpf.Ast case name (`ToLE`), not an assembly stem (`le`).  The three
    stems below are the ones that differ, taken from ir/SPEC.md §3; every
    other entry lowercases its name.  The width suffix and the operand list
-   are derived.  `tests/run.sh` anchors all eight non-trivial mnemonics
-   against ir/SPEC.md so a silent rename is a test failure. *)
+   are derived.  `tests/run.sh` anchors six mnemonics, one per stem/suffix
+   shape, against ir/SPEC.md so a silent rename is a test failure. *)
 let stem (fam : string) (ent : string) =
   match (fam, ent) with
   | "swap", "ToLE" -> "le"
@@ -359,6 +380,8 @@ let read_line (i : instance) (r : read) =
   | RSrcReg -> sprintf "`src` — the source register, read as %s" reg
   | RSrcOperand -> (
     match src_case i with
+    (* EXCEPTION 2: "32-bit immediate field" is ISA knowledge the IL does not
+       carry (the encoding record has `imm` as one field, not its width). *)
     | Some "imm" ->
       sprintf "`imm` — the 32-bit immediate field, read as %s %d-bit operand value (see §1.4)"
         (art ws) wv
@@ -416,6 +439,7 @@ let expr_samples : expr list =
     EArith (Div, x, y, p);
     EArith (Div, EComb (Sval, [ wn ], [ x ], p), y, p);
     EArith (Mod, x, y, p);
+    EArith (Mod, EComb (Sval, [ wn ], [ x ], p), y, p);
     EComb (Wrap, [ wn ], [ x ], p);
     EComb (Wrap, [ wn ], [ EComb (Sval, [ wn ], [ x ], p) ], p);
     EComb (Low, [ wn ], [ x ], p);
@@ -519,8 +543,8 @@ let family_intro b (sp : spec) (f : family) (insts : instance list) =
   then
     bp b
       "- **Host endianness** — the semantics below is stated for a %s host (`host` in the \
-       spec source); on this host the `low` form is a truncation rather than a byte \
-       reversal.\n"
+       spec source). The pin is load-bearing: the `sem` cells of this family are the \
+       right ones only for that host.\n"
       (match sp.s_host with Little -> "**little-endian**" | Big -> "**big-endian**");
   List.iter (fun c -> bp b "- **Cite** — %s\n" c) f.f_cites;
   bp b "\nWidth-generic behaviour, one row per table entry (this is what the F* backend\n\
@@ -579,10 +603,16 @@ let instance_section b (host : endianness) (f : family) (i : instance) =
        "**Definedness** — `defined: true`. No precondition: the operation above is total \
         over all operand values, in both checker modes.\n\n"
    | c ->
+     (* States the precondition and NOTHING about acceptance: whether a checker
+        accepts an instruction whose precondition it cannot prove is policy that
+        varies by mode AND by operand kind (CONSTRAINTS.md C4/C7 vs C5/C8), and
+        the spec source has no notion of modes.  Saying more here would be an
+        instruction-specific claim the IL does not carry. *)
      bp b
-       "**Definedness** — `defined: %s`. Strict mode requires a proof that %s; kernel mode \
-        accepts the instruction without one, and the operation above gives the result in \
-        every case.\n\n"
+       "**Definedness** — `defined: %s`. This is the strict-mode precondition: %s. The \
+        operation above is total regardless — it gives a result for every operand value, \
+        including when the condition fails. What a *checker* does with an instruction \
+        whose precondition it cannot prove is policy, not semantics: see §1.5.\n\n"
        (cond_str c) (en_cond ctx c));
   if i.i_obligs <> [] then begin
     bp b "**Side conditions** (recorded in the IL, discharged on the generated F*):\n\n";
@@ -631,7 +661,7 @@ let excluded_section b (sp : spec) =
           (fun (binds, reason) ->
             bp b "| `%s` | `%s` | `%s` | %s |\n" f.f_name
               (String.concat ", " (List.map (fun (a, c) -> a ^ " = " ^ c) binds))
-              (cond_str f.f_valid) (cell reason))
+              (cell (cond_str f.f_valid)) (cell reason))
           f.f_excludes)
       sp.s_families;
     bp b "\n"
@@ -699,12 +729,19 @@ let how_to_read b (sp : spec) =
      narrower than 64 bits states it.\n\n";
   bp b "### 1.5 Definedness and the two checker modes\n\n";
   bp b
-    "Each instruction carries a `defined` condition — the **strict-mode** precondition. \
-     In **kernel mode** the verifier accepts the instruction without proving it, and the \
-     `Operation` line is the behaviour in every case (this is why division by zero has a \
-     defined result). In strict mode the checker must prove the condition; programs that \
-     pass are safe under the defensive semantics, where the excluded cases are stuck \
-     states. See `fstar/CONSTRAINTS.md` (modes, C5–C9).\n\n";
+    "Each instruction carries a `defined` condition — the **strict-mode precondition** \
+     that a clean-slate checker must prove. That condition is a property of the \
+     instruction, and it is all the spec source states. What a *checker* does with an \
+     instruction whose precondition it cannot prove is policy that lives outside this \
+     document, and it is **not uniform**: the Linux verifier (and the kernel-faithful \
+     mode) accepts a *register* divisor that may be zero and a *register* shift amount \
+     that may exceed the width — the ISA defines the result, which is the `Operation` \
+     line — but **rejects** a zero *immediate* divisor and an out-of-range *immediate* \
+     shift outright; strict mode requires the proof in every case, and programs that pass \
+     it are safe under the defensive semantics, where the excluded cases are stuck \
+     states. See `fstar/CONSTRAINTS.md` C4 and C7 (immediate, both modes) against C5, C6, \
+     C8 and C9 (register). Whichever mode is in force, the `Operation` line is the \
+     behaviour when the instruction does execute.\n\n";
   bp b "### 1.6 Encoding fields written `*`\n\n";
   bp b
     "The spec fixes each of the five encoding fields (`cls`, `opc`, `sbit`, `off`, `imm`) \

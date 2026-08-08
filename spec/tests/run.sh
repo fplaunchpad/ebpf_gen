@@ -121,7 +121,9 @@ want_i=${want#* }
 if [ "$nid" = "$want_i" ]; then ok "instance id list is complete ($nid ids)"
 else bad "instance id extraction: got $nid ids, specgen check reports $want_i instances"; fi
 for id in $ids; do
-  grep -qF "\`$id\`" "$prose_new" || miss="$miss $id"
+  # must be a `#### ` SECTION heading, not merely a row of the §3 encoding
+  # table (which also names every id, and would satisfy a bare grep)
+  grep -q "^#### .*\`$id\`\$" "$prose_new" || miss="$miss $id"
 done
 if [ -z "$miss" ]; then ok "prose covers all $nid instances (one section each)"
 else bad "prose is missing sections for:$miss"; fi
@@ -132,7 +134,10 @@ missE=""
 if [ "$nent" = "$want_e" ]; then ok "entry id list is complete ($nent ids)"
 else bad "entry id extraction: got $nent ids, specgen check reports $want_e entries"; fi
 for e in $ents; do
-  grep -qF "\`$e\`" "$prose_new" || missE="$missE $e"
+  # must be a row of a family's width-generic entry table: `family/ENTRY` in
+  # the first cell (instance headings carry `family/ENTRY/...`, so the
+  # trailing backtick keeps them from matching)
+  grep -q "^| \`$e\` |" "$prose_new" || missE="$missE $e"
 done
 if [ -z "$missE" ]; then ok "prose covers all $nent table entries (width-generic row each)"
 else bad "prose is missing entry rows for:$missE"; fi
@@ -145,7 +150,7 @@ else bad "prose has $nsec instruction sections but the IL has $nid instances"; f
 # mnemonic anchors: the assembly stems are the ONE naming the IL does not
 # carry (emit_prose.ml), so pin them against ir/SPEC.md section 3
 mnem() {           # instance-id  expected-mnemonic-line
-  if grep -qF "#### \`$2\` — \`$1\`" "$prose_new"; then ok "$1 = \`$2\` (ir/SPEC.md sec. 3)"
+  if grep -qF "#### \`$2\` — \`$1\`" "$prose_new"; then ok "$1 = \`$2\` (stem+width per ir/SPEC.md sec. 3)"
   else bad "$1: expected mnemonic \`$2\`; got: $(grep -F "\`$1\`" "$prose_new" | head -1)"; fi
 }
 mnem alu/SDIV/W32/imm       "sdiv32 dst, imm"
@@ -176,6 +181,16 @@ say "C14 TO_LE on a little-endian host is a truncation" \
   'stated for a **little-endian** host'
 say "C14 byte-swap sections state the byte reversal" \
   'the low 4 bytes of the destination value in reverse order'
+say "C4/C7 immediates are rejected in BOTH modes (stated in 1.5)" \
+  'a zero *immediate* divisor and an out-of-range *immediate* shift'
+# a regression guard, not an anchor: the per-instruction definedness text once
+# claimed blanket kernel-mode acceptance, which C4/C7 deny for immediate forms
+nosay() {          # description  text-that-must-NOT-appear
+  if grep -qF "$2" "$prose_new"; then bad "$1: forbidden text is back: $2"
+  else ok "$1"; fi
+}
+nosay "no blanket kernel-mode acceptance claim per instruction" \
+  'kernel mode accepts the instruction without one'
 rm -f "$prose_new"
 
 echo "== negative fixtures =="
