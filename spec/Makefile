@@ -21,6 +21,11 @@ check: build
 list: build
 	$(SPECGEN) list $(SPEC)
 
+# the generated RFC-style prose spec (committed; `test` fails if it is stale)
+prose: build
+	mkdir -p out
+	$(SPECGEN) prose $(SPEC) > out/isa-alu.md
+
 # specgen's built-in Ebpf.Ast table vs the real Ebpf.Ast.fst
 astcheck: build
 	$(SPECGEN) astcheck $(EBPF_AST)
@@ -39,7 +44,7 @@ promote: emit
 	done
 
 # positive check + encoding anchors + AST drift + generated-F* fidelity
-# + negative fixtures
+# + prose coverage + negative fixtures
 test: build
 	EBPF_AST=$(EBPF_AST) FSTARDIR=$(FSTARDIR) ./tests/run.sh
 
@@ -47,4 +52,4 @@ clean:
 	cd specgen && dune clean
 	rm -rf $(OUT)
 
-.PHONY: build check list astcheck emit promote test clean
+.PHONY: build check list prose astcheck emit promote test clean
