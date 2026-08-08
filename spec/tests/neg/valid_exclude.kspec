@@ -1,0 +1,30 @@
+# NEGATIVE FIXTURE - K6 validity == exclusions.
+# `valid f < n` rules out (W32, SX32); the `exclude` line names (W32, SX16).
+# This is the check that caught the Ebpf.Semantics.fst MOVSX guard: an
+# intensional predicate and an extensional exclusion list that disagree.
+# EXPECT: [K6] family `movsx`: `valid` and `exclude` disagree
+
+spec neg_valid_exclude {
+  version 1
+  isa     "negative fixture"
+  host    little-endian
+}
+
+enum width     { W32 : bits=32 enc=0x04 ; W64 : bits=64 enc=0x07 }
+enum operand   { reg : enc=0x08 ; imm : enc=0x00 }
+enum alu_op    { ADD ; SUB ; MUL ; DIV ; SDIV ; MOD ; SMOD ; AND ; OR ; XOR ; LSH ; RSH ; ARSH }
+enum movsx_sz  { SX8 : bits=8 ; SX16 : bits=16 ; SX32 : bits=32 }
+enum swap_kind { ToLE ; ToBE ; Bswap }
+enum swap_sz   { SW16 : bits=16 ; SW32 : bits=32 ; SW64 : bits=64 }
+
+family movsx {
+  ctor     MovSX(w, sz, dst:reg, src:reg)
+  axis     w : width, sz : movsx_sz
+  width    n = bits w, f = bits sz
+  sem      (n, f; s = src@n) : bits n
+  valid    f < n
+  exclude  w = W32, sz = SX16   "not the form `valid` rejects"
+  enc      cls = w, opc = 0xb0, sbit = 0x08, off = f
+  cols     name | defined | sem
+  MOVSX    | -       | sext f n s
+}

@@ -39,11 +39,27 @@ file (pointers, jumps, memory are M2/M3).
 | C10 | ALU32 zero-extends result to 64 bits | spec.dfy header (:13); RFC 9669 | value tracking via u32 bounds | `res64 W32` = fits-32 value stored in u64; `narrow32`/`widen32` on intervals | both |
 | C11 | ALU64 immediate sign-extended 32→64 | `signExtend32To64` in Div/Mod_IMM; RFC 9669 general rule | ditto | `imm64 i = wrap 64 (I32.v i)` (Euclidean mod = sign extension) applied to ALL ALU64 imms | both |
 | C12 | SDIV/SMOD: truncated division; INT64_MIN/-1 = INT64_MIN, smod → 0 | RFC 9669; kernel runtime patching | accept | `trunc_div`/`trunc_mod` + wrap (gives INT_MIN case for free); do NOT copy spec.dfy's `twocom2Abs` INT_MIN-as-zero-divisor quirk | both |
-| C13 | MOVSX sign extension (8/16/32) | `Mov*SX*` (:305,:795); reg source only | accept | `MovSX` insn, `sext`; (W32,SX32) rejected as invalid encoding | both |
+| C13 | MOVSX sign extension (8/16/32) | `Mov*SX*` (:305,:795); reg source only | accept | `MovSX` insn, `sext`; (W32,SX32) rejected as invalid encoding — see the model-faithfulness note below | both |
 | C14 | byte swap TO_LE/TO_BE/BSWAP truncate to width | RFC 9669; LE host pinned | accept | `Swap` insn; `tf_swap` bounds to `2^width - 1` | both |
 | C15 | R0 initialized at Exit | `return-code.dfy` | reject ("R0 !read_ok") | `check Exit`: `read ts R0` must be `Some` | both |
 | C16 | `Assert_ r k`: claimed bound must be provable | our pseudo-instruction (erased at serialization) | n/a (not in bytecode) | `check`: `a.ihi <= k`; semantics: stuck if violated (so soundness covers it) | both |
 | C17 | no unreachable code after Exit | kernel: unreachable insn reject | reject ("unreachable insn") | `check_prog`: `Exit :: _ :: _ → None` | both |
+
+### C13 model-faithfulness note (found by KeelSpec, MS1)
+
+The C13 exclusion of `(W32, SX32)` is enforced by `Ebpf.Check.fst:121`
+(`W32? w && SX32? sz -> None`) and by `Ebpf.Annot.fst:158` (`f < 32`), but
+**not** by `Ebpf.Semantics.stepx`, which guards with `f <= bits w`. Since
+`movsx_bits : n:pos{n <= 32}` and `bits w ∈ {32,64}`, that guard is a
+tautology — its `else None` branch is unreachable for every `(w, sz)` — so
+the model steps `MovSX W32 SX32` as the identity even though the comment on
+the next line calls it invalid. The intensional predicate that yields exactly
+the five real forms is `f < bits w`; `spec/ebpf_alu.kspec` states it
+(`valid f < n`) and specgen's K6 check requires the extensional exclusion to
+agree with it. The guard is tightened to `f < bits w` when MS2 generates
+`Ebpf.Semantics` from the spec; no accepted program is affected (`Ebpf.Check`
+already rejects the form), and `make verify` is the arbiter. See
+`spec/DESIGN.md` §8.
 
 ## Value-tracking domain
 
