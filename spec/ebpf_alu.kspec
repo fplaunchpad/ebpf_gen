@@ -129,10 +129,10 @@ family movsx {
 # ---------------------------------------------------------------------------
 
 family swap {
-  ctor     Swap(k, z, dst:reg)
+  ctor     Swap(k, sz, dst:reg)
   key      k : swap_kind
-  axis     z : swap_sz
-  width    m = bits z
+  axis     sz : swap_sz
+  width    m = bits sz
   sem      (m; d = dst@64) : bits m
   enc      off = 0, imm = m
   cite     RFC 9669 sec. 4.1 (byte swap); CONSTRAINTS.md C14

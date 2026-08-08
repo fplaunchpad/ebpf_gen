@@ -2,7 +2,10 @@
 
    specgen check    <file.kspec>       parse, elaborate, run meta-checks K1-K9
    specgen list     <file.kspec>       print the flattened instance table
-   specgen astcheck <Ebpf.Ast.fst>     diff the built-in AST table vs the real one *)
+   specgen astcheck <Ebpf.Ast.fst>     diff the built-in AST table vs the real one
+   specgen emit     <file.kspec> <fstar-dir> <out-dir>
+                                       splice the generated F* regions of
+                                       Ebpf.Semantics.fst / Ebpf.Serialize.fst *)
 
 open Keelspec
 
@@ -11,7 +14,8 @@ let usage () =
     "usage:\n\
     \  specgen check    <file.kspec>\n\
     \  specgen list     <file.kspec>\n\
-    \  specgen astcheck <path/to/Ebpf.Ast.fst>";
+    \  specgen astcheck <path/to/Ebpf.Ast.fst>\n\
+    \  specgen emit     <file.kspec> <fstar-dir> <out-dir>";
   exit 2
 
 let names l = String.concat ", " l
@@ -160,4 +164,17 @@ let () =
      | e -> Printf.eprintf "specgen internal error: %s\n" (Printexc.to_string e); exit 3)
   | _ :: "astcheck" :: file :: [] ->
     (try astcheck file with Sys_error m -> prerr_endline m; exit 1)
+  | _ :: "emit" :: file :: indir :: outdir :: [] ->
+    (try
+       let sf = Parse.parse_file file in
+       let sp, _ = Elab.elab sf in
+       let src = "spec/" ^ Filename.basename file in
+       let written = Emit_fstar.emit sp src indir outdir in
+       List.iter (fun p -> Printf.printf "emitted %s\n" p) written
+     with
+     | Kpos.Kerr (p, m) -> prerr_string (Kpos.render p m); exit 1
+     | Emit_fstar.Splice m -> Printf.eprintf "specgen emit: %s\n" m; exit 1
+     | Failure m -> Printf.eprintf "specgen emit: %s\n" m; exit 1
+     | Sys_error m -> prerr_endline m; exit 1
+     | e -> Printf.eprintf "specgen internal error: %s\n" (Printexc.to_string e); exit 3)
   | _ -> usage ()

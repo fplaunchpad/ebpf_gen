@@ -1,5 +1,7 @@
 fstar/.cache/
 fstar/out/
+spec/out/
+spec/specgen/_build/
 harness/loader
 .tmp-dl/
 repos/

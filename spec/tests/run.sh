@@ -4,13 +4,16 @@
 #   1. the spec passes all meta-checks
 #   2. the generated opcodes match Ebpf.Serialize's own anchors
 #   3. specgen's built-in Ebpf.Ast table has not drifted from Ebpf.Ast.fst
-#   4. every negative fixture is REJECTED, with its expected diagnostic and
+#   4. the GENERATED regions of the committed F* files are exactly what the
+#      spec produces today (MS2 fidelity / promote is idempotent)
+#   5. every negative fixture is REJECTED, with its expected diagnostic and
 #      a file:line:col position
 set -u
 
 cd "$(dirname "$0")/.." || exit 1          # spec/
 SPECGEN=./specgen/_build/default/bin/specgen.exe
-EBPF_AST=${EBPF_AST:-../fstar/Ebpf.Ast.fst}
+FSTARDIR=${FSTARDIR:-../fstar}
+EBPF_AST=${EBPF_AST:-$FSTARDIR/Ebpf.Ast.fst}
 
 pass=0
 fail=0
@@ -38,13 +41,13 @@ anchor() {         # id  expected-opcode  what
   if [ "$got" = "opcode=$2" ]; then ok "$1 = $2 ($3)"
   else bad "$1: expected opcode=$2, got ${got:-none} ($3)"; fi
 }
-anchor alu/ADD/W64/reg     0x0f "Serialize.fst:110 add64 r1,r2 = 0f"
-anchor mov/MOV/W64/imm     0xb7 "Serialize.fst:105 mov64 r0,0 = b7"
+anchor alu/ADD/W64/reg     0x0f "Serialize assert_norm: add64 r1,r2 = 0f"
+anchor mov/MOV/W64/imm     0xb7 "Serialize assert_norm: mov64 r0,0 = b7"
 anchor alu/SDIV/W64/reg    0x3f "sdiv64 = div64 opcode with off=1"
 anchor movsx/MOVSX/W64/SX8 0xbf "0xb0 + 0x08 + cls W64"
-anchor swap/ToLE/SW16      0xd4 "Serialize.fst:75 0xd0 + 0x04"
-anchor swap/ToBE/SW64      0xdc "Serialize.fst:76 0xd0 + 0x08 + 0x04"
-anchor swap/Bswap/SW32     0xd7 "Serialize.fst:77 0xd0 + 0x07"
+anchor swap/ToLE/SW16      0xd4 "Serialize encode_insn Swap ToLE: 0xd0 + 0x04"
+anchor swap/ToBE/SW64      0xdc "Serialize encode_insn Swap ToBE: 0xd0 + 0x08 + 0x04"
+anchor swap/Bswap/SW32     0xd7 "Serialize encode_insn Swap Bswap: 0xd0 + 0x07"
 
 echo "== IL: family-level encoding spellings (what MS3 reads) =="
 spell() {          # family  expected-spelling
@@ -63,6 +66,28 @@ if [ -f "$EBPF_AST" ]; then
 else
   bad "astcheck: $EBPF_AST not found (set EBPF_AST=<path to Ebpf.Ast.fst>)"
 fi
+
+echo "== generated F* fidelity (spec -> $FSTARDIR) =="
+# `specgen emit` copies the hand-written frame through verbatim and rewrites
+# only the BEGIN/END GENERATED regions, so a difference here means exactly
+# one thing: the committed F* no longer matches the spec.  Run
+# `make -C spec promote` to fix it.
+tmp=$(mktemp -d)
+if out=$("$SPECGEN" emit ebpf_alu.kspec "$FSTARDIR" "$tmp" 2>&1); then
+  ok "specgen emit ebpf_alu.kspec"
+  for f in Ebpf.Semantics.fst Ebpf.Serialize.fst; do
+    if diff -u "$FSTARDIR/$f" "$tmp/$f" > "$tmp/$f.diff" 2>&1; then
+      ok "$f is up to date with the spec"
+    else
+      bad "$f has DRIFTED from ebpf_alu.kspec (run 'make -C spec promote')"
+      sed 's/^/        /' "$tmp/$f.diff" | head -40
+    fi
+  done
+else
+  echo "$out" | sed 's/^/  /'
+  bad "specgen emit ebpf_alu.kspec"
+fi
+rm -rf "$tmp"
 
 echo "== negative fixtures =="
 for f in tests/neg/*.kspec; do
