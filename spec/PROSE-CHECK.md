@@ -24,7 +24,7 @@ Compared, on 2026-08-08:
 | side | what was read |
 |---|---|
 | generated | `spec/out/isa-alu.md` §2 (72 instruction sections), §3 (encoding table), §4 (excluded forms) |
-| RFC 9669 | §4.1 "Arithmetic instructions": the opcode/offset/description table, the operand-width paragraph, the shift-mask sentence, the signed-modulo sentence, the MOVSX sentence, the byte-swap rows (fetched from `rfc-editor.org`) |
+| RFC 9669 | §4.1 "Arithmetic instructions": the opcode/offset/description table, the operand-width paragraph, the shift-mask sentence, the signed-modulo sentence, the MOVSX sentence, the byte-swap rows (fetched from `rfc-editor.org`; **positive** quotations only — see P2 for why one negative observation is recorded as a flag rather than a finding) |
 | repo | `fstar/CONSTRAINTS.md` C1–C17 (esp. C5, C8, C10, C11, C12, C13, C14), `fstar/Ebpf.Semantics.fst` header, `fstar/Ebpf.Int.fst`, `ir/SPEC.md` §3 (mnemonics) |
 
 Two artifacts per instruction are compared separately, because they do not
@@ -113,14 +113,23 @@ carry a rendering hint. The second is cheaper and dishonest in the way this
 project is trying to avoid — a hint is authored prose again — so the first is
 the right answer if this matters.
 
-**P2 — C12's corner case is implied, not stated, on both sides.** RFC 9669
-§4.1 requires truncated signed division/modulo but (searched) contains **no**
-sentence about signed overflow — most-negative divided by −1. `CONSTRAINTS.md`
-C12 states "INT64_MIN/-1 = INT64_MIN, smod → 0" and cites "RFC 9669"; that
-behaviour actually follows from truncated division plus the 64-bit register
-width rather than from an explicit RFC sentence, so **C12's citation is
-slightly over-attributed** (the claim is right; the source is the composition,
-not the text). The generated prose is in the same position one level down: it
+**P2 — C12's corner case is implied, not stated.** RFC 9669 §4.1 requires
+truncated signed division/modulo (`a % n = a - n * trunc(a / n)`). No sentence
+about signed *overflow* — most-negative divided by −1 — turned up in the
+§4.1 text read for this check. `CONSTRAINTS.md` C12 states "INT64_MIN/-1 =
+INT64_MIN, smod → 0" and cites "RFC 9669"; that behaviour certainly follows
+from truncated division plus the 64-bit register width, so if the RFC really
+is silent then C12's citation is over-attributed — the claim would be right
+and the source would be the composition rather than the text.
+
+**This is an unverified negative claim about an RFC's contents and nothing has
+been changed on the strength of it.** `fstar/CONSTRAINTS.md` is untouched;
+the item is logged for someone to confirm against the primary source, and a
+negative ("the text does not say X") is exactly the kind of claim that needs
+the document in hand rather than a search. Recorded here as a flag, not a
+finding.
+
+The generated prose is in the same position one level down: it
 says "…, truncated toward zero), reduced modulo 2^64 (two's-complement
 wrap-around)", from which the corner case follows in one step, and never
 spells it out. *Cause:* the AST has no notion of a distinguished input; the

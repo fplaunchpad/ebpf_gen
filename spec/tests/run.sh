@@ -112,6 +112,14 @@ fi
 ids=$(echo "$list" | grep -oE '^[a-z]+/[A-Za-z0-9_]+(/[A-Za-z0-9_]+)+' | sort -u)
 nid=$(echo "$ids" | grep -c .)
 miss=""
+# the id lists must number exactly what `specgen check` reported, so that a
+# broken extraction cannot make the coverage checks below pass vacuously
+want=$("$SPECGEN" check ebpf_alu.kspec 2>/dev/null |
+       sed -n 's/^OK: .* - \([0-9]*\) entries, \([0-9]*\) instances.*/\1 \2/p')
+want_e=${want% *}
+want_i=${want#* }
+if [ "$nid" = "$want_i" ]; then ok "instance id list is complete ($nid ids)"
+else bad "instance id extraction: got $nid ids, specgen check reports $want_i instances"; fi
 for id in $ids; do
   grep -qF "\`$id\`" "$prose_new" || miss="$miss $id"
 done
@@ -121,6 +129,8 @@ else bad "prose is missing sections for:$miss"; fi
 ents=$(echo "$list" | awk '/^family /{f=$2} /^  entry /{print f "/" $2}')
 nent=$(echo "$ents" | grep -c .)
 missE=""
+if [ "$nent" = "$want_e" ]; then ok "entry id list is complete ($nent ids)"
+else bad "entry id extraction: got $nent ids, specgen check reports $want_e entries"; fi
 for e in $ents; do
   grep -qF "\`$e\`" "$prose_new" || missE="$missE $e"
 done
