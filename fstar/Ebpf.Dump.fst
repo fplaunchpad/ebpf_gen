@@ -73,4 +73,11 @@ let _ = assert True by (
   dump "ex_bswap16" ex_bswap16;
   dump "ex_bswap32" ex_bswap32;
   dump "ex_bswap64" ex_bswap64;
+  (* D1 regression pin (KeelSpec MS4): (W32,SX32) = BPF_ALU|BPF_MOV|BPF_X with
+     off=32 is NOT a valid instruction (movsx32 is ALU64-only, RFC 9669). Our
+     checker rejects it in both modes; the real verifier must too. This is the
+     kernel-side evidence for the `exclude` reason in spec/ebpf_alu.kspec and
+     the mechanical guard for the stepx `f < bits w` guard (D1). *)
+  dump "ex_movsx32_32" [Mov W64 R1 (OpImm 1l); MovSX W32 SX32 R0 R1;
+                        Mov W64 R0 (OpImm 0l); Exit];
   ())
