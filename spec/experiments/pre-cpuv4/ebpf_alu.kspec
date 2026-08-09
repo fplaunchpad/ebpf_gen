@@ -1,0 +1,148 @@
+# ebpf_alu.kspec (stage 0) --- RECONSTRUCTED pre-cpuv4 spec state.
+#
+# MS5 DRIFT EXPERIMENT.  This is NOT a historical checkout: it is
+# `spec/ebpf_alu.kspec` with the cpuv4 (Linux 6.6, "ISA v4") additions
+# removed by hand, so that replaying the cpuv4 change is a spec patch whose
+# size can be measured.  See spec/DRIFT.md.
+#
+# Removed relative to the current spec (the four cpuv4 items):
+#   1. alu_op cases SDIV, SMOD          (BPF_SDIV/BPF_SMOD = DIV/MOD, off=1)
+#   2. the alu `off` COLUMN             (pre-cpuv4 every ALU op has off=0, so
+#                                        `off` is a family constant)
+#   3. the whole movsx family + movsx_sz enum   (BPF_MOVSX)
+#   4. swap_kind case Bswap + the swap Bswap row (unconditional BPF_BSWAP;
+#                                        TO_LE/TO_BE are classic and stay)
+#
+# NOT removed, deliberately: the `cite RFC 9669` lines.  RFC 9669 postdates
+# cpuv4, so citing it here is anachronistic; keeping the citation STYLE fixed
+# across the two states means the measured patch contains cpuv4 content only,
+# not a re-citation pass.  Disclosed in DRIFT.md.
+#
+# `specgen check` on this file against the CURRENT fstar/Ebpf.Ast.fst MUST
+# FAIL.  That failure is the experiment's measurement surface, not a bug.
+#
+# EXPECT: [K1] enum `alu_op` disagrees with Ebpf.Ast type `alu_op`:
+# EXPECT-ALSO:        in spec, not in AST: (none)
+# EXPECT-ALSO:        in AST, not in spec: SDIV, SMOD
+#
+# --- everything below this line is the reconstructed pre-cpuv4 file ---------
+
+# ebpf_alu.kspec — KeelSpec source for the eBPF arithmetic (ALU) fragment.
+#
+# ONE source of truth for three artifacts (see spec/DESIGN.md):
+#   * F* semantics   — Ebpf.Semantics.{alu_semn, alu_defined,
+#                      swap_bits, swap_sem}                       (MS2)
+#   * encoding       — Ebpf.Serialize.{cls, op_bits,
+#                      swap_imm, encode_insn}                     (MS3)
+#   * prose          — derived from `sem`/`defined`, never authored (MS4)
+#
+# Format, in one paragraph: `enum` declares a finite argument domain of an
+# Ebpf.Ast constructor (with the numeric `bits` value and the `enc` encoding
+# value each case carries).  A `family` binds ONE Ebpf.Ast constructor; its
+# header declares the form axes (whose cartesian product generates the
+# instruction instances), the semantic width variables, the operand reads,
+# and the encoding fields that are constant across the family; its rows are
+# a pipe-separated table, one row per key-enum case, carrying the per-row
+# encoding fields plus the `defined` and `sem` expressions.  `#` comments run
+# to end of line.  ASCII only; `sem` uses F* spelling (`=`, `<>`,
+# `if .. then .. else ..`) so a cell is copy-pasteable into an F* file.
+#
+# Prose is NEVER authored here.  `cite` lines carry provenance only.
+
+spec ebpf_alu {
+  version 0
+  isa     "eBPF ISA before cpuv4 (Linux < 6.6); reconstruction, see DRIFT.md"
+  host    little-endian     # load-bearing: ToLE = truncate, ToBE = reverse
+}
+
+# ---------------------------------------------------------------------------
+# Argument domains (must match Ebpf.Ast exactly; checked by AST conformance).
+#   bits=<n>  the numeric width the case denotes  (-> swap_bits)
+#   enc=<b>   the byte the case contributes to the opcode
+# ---------------------------------------------------------------------------
+
+enum width     { W32 : bits=32 enc=0x04 ; W64 : bits=64 enc=0x07 }
+enum operand   { reg : enc=0x08 ; imm : enc=0x00 }
+enum alu_op    { ADD ; SUB ; MUL ; DIV ; MOD ; AND ; OR ; XOR ; LSH ; RSH ; ARSH }
+enum swap_kind { ToLE ; ToBE }
+enum swap_sz   { SW16 : bits=16 ; SW32 : bits=32 ; SW64 : bits=64 }
+
+# ---------------------------------------------------------------------------
+# ALU binary operations — 11 ops x {W32,W64} x {reg,imm} = 44 instances.
+# opcode = cls + opc + sbit;  off is 0 for every ALU op.
+# ---------------------------------------------------------------------------
+
+family alu {
+  ctor     Alu(w, op, dst:reg, src:operand)
+  key      op : alu_op
+  axis     w : width, src : operand
+  width    n = bits w
+  sem      (n; d = dst@n, s = src@n) : bits n
+  defined  (n; s)
+  enc      cls = w, sbit = src, off = 0
+  cite     RFC 9669 sec. 4.1 (arithmetic instructions)
+  cite     CONSTRAINTS.md C5, C6, C7, C8, C9, C10, C11
+  cols     name | opc  | defined | sem
+  ADD      | 0x00 | -       | wrap n (d + s)
+  SUB      | 0x10 | -       | wrap n (d - s)
+  MUL      | 0x20 | -       | wrap n (d * s)
+  DIV      | 0x30 | s <> 0  | if s = 0 then 0 else wrap n (d / s)
+  MOD      | 0x90 | s <> 0  | if s = 0 then d else wrap n (d % s)
+  AND      | 0x50 | -       | logand n d s
+  OR       | 0x40 | -       | logor n d s
+  XOR      | 0xa0 | -       | logxor n d s
+  LSH      | 0x60 | s < n   | wrap n (d * pow2 (s % n))
+  RSH      | 0x70 | s < n   | wrap n (d / pow2 (s % n))
+  ARSH     | 0xc0 | s < n   | wrap n (sval n d / pow2 (s % n))
+}
+
+# ---------------------------------------------------------------------------
+# NEG — 2 instances.  Register form only (no immediate NEG in the ISA).
+# ---------------------------------------------------------------------------
+
+family neg {
+  ctor     Neg(w, dst:reg)
+  axis     w : width
+  width    n = bits w
+  sem      (n; d = dst@n) : bits n
+  enc      cls = w, opc = 0x80, sbit = 0x00, off = 0
+  cite     RFC 9669 sec. 4.1 (NEG)
+  cols     name | defined | sem
+  NEG      | -       | wrap n (0 - d)
+}
+
+# ---------------------------------------------------------------------------
+# MOV — 2 widths x {reg,imm} = 4 instances.  The operand read (imm64 sign-
+# extension for W64, imm32 for W32) is part of `src@n`, not of `sem`.
+# ---------------------------------------------------------------------------
+
+family mov {
+  ctor     Mov(w, dst:reg, src:operand)
+  axis     w : width, src : operand
+  width    n = bits w
+  sem      (n; s = src@n) : bits n
+  enc      cls = w, opc = 0xb0, sbit = src, off = 0
+  cite     RFC 9669 sec. 4.1 (MOV); CONSTRAINTS.md C10, C11
+  cols     name | defined | sem
+  MOV      | -       | s
+}
+
+# ---------------------------------------------------------------------------
+# Byte swaps — 2 kinds x 3 sizes = 6 instances.  The size is carried in imm
+# (16/32/64), the kind in the opcode class/source bits.  The whole 64-bit
+# destination is read; the result is a bits-<size> value (so the high bits of
+# the destination are cleared).  LITTLE-ENDIAN HOST: ToLE is a truncation.
+# ---------------------------------------------------------------------------
+
+family swap {
+  ctor     Swap(k, sz, dst:reg)
+  key      k : swap_kind
+  axis     sz : swap_sz
+  width    m = bits sz
+  sem      (m; d = dst@64) : bits m
+  enc      off = 0, imm = m
+  cite     RFC 9669 sec. 4.1 (byte swap); CONSTRAINTS.md C14
+  cols     name | cls  | opc  | sbit | defined | sem
+  ToLE     | 0x04 | 0xd0 | 0x00 | -       | low m d
+  ToBE     | 0x04 | 0xd0 | 0x08 | -       | bswap (m / 8) d
+}

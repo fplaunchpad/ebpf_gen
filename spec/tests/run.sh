@@ -108,6 +108,46 @@ for f in tests/neg/*.kspec; do
   fi
 done
 
+echo "== MS5 drift experiment: the pre-cpuv4 spec must be REJECTED =="
+# spec/experiments/pre-cpuv4/ reconstructs the spec state before the cpuv4
+# (Linux 6.6) ISA change and replays the change stage by stage.  Every stage
+# is an EXPECTED-FAIL fixture: run against the CURRENT Ebpf.Ast, `specgen
+# check` must reject it with a K1 or K9 diagnostic that names the missing
+# instructions DIRECTIONALLY.  That is the drift detector, and this section
+# pins it so the experiment stays reproducible.  See spec/DRIFT.md.
+for f in experiments/pre-cpuv4/*.kspec; do
+  want=$(grep -m1 '^# EXPECT: ' "$f" | sed 's/^# EXPECT: //')
+  out=$("$SPECGEN" check "$f" 2>&1)
+  rc=$?
+  name=$(basename "$f")
+  if [ $rc -eq 0 ]; then
+    bad "$name was ACCEPTED (the drift detector did not fire)"
+  elif ! echo "$out" | grep -qE "^$f:[0-9]+:[0-9]+: error: \[K[19]\]"; then
+    bad "$name: expected a K1/K9 diagnostic with a file:line:col position"
+    printf '        got : %s\n' "$(echo "$out" | head -1)"
+  elif ! echo "$out" | grep -qF "$want"; then
+    bad "$name rejected with the wrong diagnostic"
+    printf '        want: %s\n        got : %s\n' "$want" "$(echo "$out" | head -1)"
+  else
+    # the DIRECTIONAL lines ("in AST, not in spec: ...") are the measurement
+    # surface of the experiment, so pin them verbatim too
+    miss=""
+    n=$(grep -c '^# EXPECT-ALSO: ' "$f")
+    i=1
+    while [ "$i" -le "$n" ]; do
+      w=$(grep '^# EXPECT-ALSO: ' "$f" | sed -n "${i}p" | sed 's/^# EXPECT-ALSO: //')
+      echo "$out" | grep -qF "$w" || miss="$miss
+        want: $w"
+      i=$((i + 1))
+    done
+    if [ -n "$miss" ]; then
+      bad "$name: missing directional diagnostic line(s)$miss"
+    else
+      ok "$name rejected: $(echo "$out" | head -1 | sed 's/^.*error: //')"
+    fi
+  fi
+done
+
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

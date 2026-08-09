@@ -1,0 +1,115 @@
+# ebpf_alu.kspec (stage 2) --- MS5 DRIFT EXPERIMENT, intermediate state.
+#
+# Stage 0 (`ebpf_alu.kspec`) is the reconstructed pre-cpuv4 spec; the live
+# `spec/ebpf_alu.kspec` is the post-cpuv4 spec.  The stage files are the
+# maintainer's WORKLIST between the two: at each step the previous
+# `specgen check` diagnostic has been acted on, and the next one is reported.
+# `specgen check` on this file MUST FAIL.  See spec/DRIFT.md.
+#
+# Done so far:   stage 1 + the SDIV/SMOD rows, and the per-row `off` column
+#                they force (pre-cpuv4 `off` was a family constant 0).
+# Still missing: the movsx family, and the swap Bswap row.
+#
+# EXPECT: [K9] no family specifies Ebpf.Ast constructor `MovSX`:
+# EXPECT-ALSO:        in AST, not in spec: MovSX
+
+spec ebpf_alu {
+  version 0
+  isa     "eBPF ISA before cpuv4 (Linux < 6.6); reconstruction, see DRIFT.md"
+  host    little-endian     # load-bearing: ToLE = truncate, ToBE = reverse
+}
+
+# ---------------------------------------------------------------------------
+# Argument domains (must match Ebpf.Ast exactly; checked by AST conformance).
+#   bits=<n>  the numeric width the case denotes  (-> swap_bits)
+#   enc=<b>   the byte the case contributes to the opcode
+# ---------------------------------------------------------------------------
+
+enum width     { W32 : bits=32 enc=0x04 ; W64 : bits=64 enc=0x07 }
+enum operand   { reg : enc=0x08 ; imm : enc=0x00 }
+enum alu_op    { ADD ; SUB ; MUL ; DIV ; SDIV ; MOD ; SMOD ; AND ; OR ; XOR ; LSH ; RSH ; ARSH }
+enum movsx_sz  { SX8 : bits=8 ; SX16 : bits=16 ; SX32 : bits=32 }
+enum swap_kind { ToLE ; ToBE ; Bswap }
+enum swap_sz   { SW16 : bits=16 ; SW32 : bits=32 ; SW64 : bits=64 }
+
+# ---------------------------------------------------------------------------
+# ALU binary operations — 13 ops x {W32,W64} x {reg,imm} = 52 instances.
+# opcode = cls + opc + sbit;  SDIV/SMOD are DIV/MOD with off=1 (ISA v4).
+# ---------------------------------------------------------------------------
+
+family alu {
+  ctor     Alu(w, op, dst:reg, src:operand)
+  key      op : alu_op
+  axis     w : width, src : operand
+  width    n = bits w
+  sem      (n; d = dst@n, s = src@n) : bits n
+  defined  (n; s)
+  enc      cls = w, sbit = src
+  cite     RFC 9669 sec. 4.1 (arithmetic instructions)
+  cite     CONSTRAINTS.md C5, C6, C7, C8, C9, C10, C11, C12
+  cols     name | opc  | off | defined | sem
+  ADD      | 0x00 | 0   | -       | wrap n (d + s)
+  SUB      | 0x10 | 0   | -       | wrap n (d - s)
+  MUL      | 0x20 | 0   | -       | wrap n (d * s)
+  DIV      | 0x30 | 0   | s <> 0  | if s = 0 then 0 else wrap n (d / s)
+  SDIV     | 0x30 | 1   | s <> 0  | if s = 0 then 0 else wrap n (trunc_div (sval n d) (sval n s))
+  MOD      | 0x90 | 0   | s <> 0  | if s = 0 then d else wrap n (d % s)
+  SMOD     | 0x90 | 1   | s <> 0  | if s = 0 then d else wrap n (trunc_mod (sval n d) (sval n s))
+  AND      | 0x50 | 0   | -       | logand n d s
+  OR       | 0x40 | 0   | -       | logor n d s
+  XOR      | 0xa0 | 0   | -       | logxor n d s
+  LSH      | 0x60 | 0   | s < n   | wrap n (d * pow2 (s % n))
+  RSH      | 0x70 | 0   | s < n   | wrap n (d / pow2 (s % n))
+  ARSH     | 0xc0 | 0   | s < n   | wrap n (sval n d / pow2 (s % n))
+}
+
+# ---------------------------------------------------------------------------
+# NEG — 2 instances.  Register form only (no immediate NEG in the ISA).
+# ---------------------------------------------------------------------------
+
+family neg {
+  ctor     Neg(w, dst:reg)
+  axis     w : width
+  width    n = bits w
+  sem      (n; d = dst@n) : bits n
+  enc      cls = w, opc = 0x80, sbit = 0x00, off = 0
+  cite     RFC 9669 sec. 4.1 (NEG)
+  cols     name | defined | sem
+  NEG      | -       | wrap n (0 - d)
+}
+
+# ---------------------------------------------------------------------------
+# MOV — 2 widths x {reg,imm} = 4 instances.  The operand read (imm64 sign-
+# extension for W64, imm32 for W32) is part of `src@n`, not of `sem`.
+# ---------------------------------------------------------------------------
+
+family mov {
+  ctor     Mov(w, dst:reg, src:operand)
+  axis     w : width, src : operand
+  width    n = bits w
+  sem      (n; s = src@n) : bits n
+  enc      cls = w, opc = 0xb0, sbit = src, off = 0
+  cite     RFC 9669 sec. 4.1 (MOV); CONSTRAINTS.md C10, C11
+  cols     name | defined | sem
+  MOV      | -       | s
+}
+
+# ---------------------------------------------------------------------------
+# Byte swaps — 2 kinds x 3 sizes = 6 instances.  The size is carried in imm
+# (16/32/64), the kind in the opcode class/source bits.  The whole 64-bit
+# destination is read; the result is a bits-<size> value (so the high bits of
+# the destination are cleared).  LITTLE-ENDIAN HOST: ToLE is a truncation.
+# ---------------------------------------------------------------------------
+
+family swap {
+  ctor     Swap(k, sz, dst:reg)
+  key      k : swap_kind
+  axis     sz : swap_sz
+  width    m = bits sz
+  sem      (m; d = dst@64) : bits m
+  enc      off = 0, imm = m
+  cite     RFC 9669 sec. 4.1 (byte swap); CONSTRAINTS.md C14
+  cols     name | cls  | opc  | sbit | defined | sem
+  ToLE     | 0x04 | 0xd0 | 0x00 | -       | low m d
+  ToBE     | 0x04 | 0xd0 | 0x08 | -       | bswap (m / 8) d
+}
