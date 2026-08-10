@@ -7,8 +7,14 @@
 # `specgen check` on this file MUST FAIL.  See spec/DRIFT.md.
 #
 # Done so far:   stage 2 + the whole movsx family.
-# Still missing: the swap Bswap row.  Applying it yields the live
-#                `spec/ebpf_alu.kspec` (modulo the banner and `version 1`).
+# Still missing: the swap Bswap row -- the last CONTENT edit of the replay.
+#                NOTE: these stage files are not textually one line from the
+#                live `spec/ebpf_alu.kspec`.  Each carries this worklist
+#                banner INSTEAD of the file's own ~20-line doc comment (only
+#                stage 0 keeps that), and all stages keep `version 0` and the
+#                pre-cpuv4 `isa` string.  So `diff stage3-movsx.kspec
+#                ../../ebpf_alu.kspec` shows the banner/header block too.
+#                The measured patch is stage 0 -> live; see spec/DRIFT.md.
 #
 # EXPECT: [K9] family `swap` does not cover Ebpf.Ast constructor `Swap` exhaustively:
 # EXPECT-ALSO:        in AST, not in spec: Swap(Bswap,SW16), Swap(Bswap,SW32), Swap(Bswap,SW64)
@@ -16,7 +22,7 @@
 
 spec ebpf_alu {
   version 0
-  isa     "eBPF ISA before cpuv4 (Linux < 6.6); reconstruction, see DRIFT.md"
+  isa     "Linux Documentation/bpf/instruction-set.rst; pinned kernel Linux 6.5"
   host    little-endian     # load-bearing: ToLE = truncate, ToBE = reverse
 }
 

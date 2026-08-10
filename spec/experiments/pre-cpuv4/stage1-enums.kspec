@@ -17,7 +17,7 @@
 
 spec ebpf_alu {
   version 0
-  isa     "eBPF ISA before cpuv4 (Linux < 6.6); reconstruction, see DRIFT.md"
+  isa     "Linux Documentation/bpf/instruction-set.rst; pinned kernel Linux 6.5"
   host    little-endian     # load-bearing: ToLE = truncate, ToBE = reverse
 }
 
