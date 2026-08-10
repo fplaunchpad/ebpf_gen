@@ -61,6 +61,10 @@ byte-identically to what is committed.
 Applying the last diagnostic — the `Bswap` row — yields the live
 `spec/ebpf_alu.kspec`.
 
+The directory holds one further artifact, `llm-draft.kspec`, which belongs to
+the §9 drafting experiment rather than to the replay: it is a blinded model
+draft of this same patch, committed exactly as written.
+
 **Why stages.** `specgen check` reports the first error and stops, so a single
 pre-cpuv4 file yields a single diagnostic. Staging is also what exercises K9 at
 all: K1 (enum conformance) runs before families are elaborated, so K9's
@@ -129,9 +133,14 @@ Three properties of this output are the point:
   `in spec, not in AST`, so a spec that is *ahead* of the model is as visible
   as one that is behind. K1 and K9 were built this way for this experiment
   (`DESIGN.md` §4).
-- **Itemized at instance granularity.** K9 does not say "`alu` is incomplete";
-  it names the eight missing `(width, op, operand-form)` points. A forgotten
-  `(W32, imm)` form is a listed hole, not an invisible omission.
+- **Itemized, at the finest granularity available.** K9 has two modes, both
+  visible above. When a family exists but is incomplete it reports at
+  **instance** granularity — it does not say "`alu` is incomplete", it names
+  the eight missing `(width, op, operand-form)` points, so a forgotten
+  `(W32, imm)` form is a listed hole rather than an invisible omission. When
+  *no* family claims a constructor at all there are no instances to name, so
+  it reports at **constructor** granularity (`in AST, not in spec: MovSX`) —
+  which is stage 2's diagnostic.
 - **A worklist that terminates.** Each diagnostic is actionable in isolation,
   and acting on the last one produces a spec that passes all nine checks. The
   ISA change is not "a diff to review" but "a queue to drain".
@@ -141,7 +150,7 @@ asserting that each fixture is *rejected*, with a `[K1]`/`[K9]` tag, a
 `file:line:col` position, and the exact directional lines — pinned per file via
 `# EXPECT:` / `# EXPECT-ALSO:` headers, the same convention as `tests/neg/`.
 The fixtures are asserted **as failing**, so they cannot block the green path.
-`make -C spec test` is 25 assertions, up from 21.
+`make -C spec test` is 26 assertions, up from 21.
 
 ---
 
@@ -214,6 +223,14 @@ cpuv4 turning `off` into a per-row column is therefore what brings `op_off`
 into existence, *and* what forces the matching hand edit in `encode_insn`
 (§5(d)). The semantics arm, the opcode table, the offset table and the encoder
 call site all move together or the build breaks.
+
+**The version stamp makes regeneration auditable.** Every generated region
+opens with `(* spec ebpf_alu v<N>, host little-endian *)`, which is why stage 0
+carries `version 0`. Emitting a copy of the live spec with `version 1` changed
+to `version 2` — a **one-line** spec edit — rewrites that stamp in **all five**
+generated regions across both files and changes nothing else. So the generated
+text always names the spec revision it came from, and a region left behind by a
+partial promote is visible by inspection.
 
 **Prose is not counted.** `specgen prose` lives on the unmerged branch
 `ms3-prose-backend`, not on `main`. The prose backend consumes `s_instances` +
@@ -383,31 +400,50 @@ Measured on the `test-clone` VM (4 cores), idle and strictly serial;
 7. **The stage files are not textually one line from the live spec.** Stages
    1–3 carry a worklist banner instead of the file's doc comment and keep
    `version 0`; the measured patch is stage 0 → live, not stage 3 → live.
+8. **The §9 drafting experiment is blinded by prompt construction, not by
+   sandboxing**, and it measures DSL translation of a supplied change, not ISA
+   derivation. Its pass is weak evidence by construction; §9 says why, and
+   lists the behavioural evidence that the answer was not read.
 
 ---
 
 ## 8. Reproducing
 
 ```sh
-# the four detector diagnostics, in order
 make -C spec build
-for f in spec/experiments/pre-cpuv4/ebpf_alu.kspec \
-         spec/experiments/pre-cpuv4/stage1-enums.kspec \
-         spec/experiments/pre-cpuv4/stage2-alu-rows.kspec \
-         spec/experiments/pre-cpuv4/stage3-movsx.kspec; do
-  spec/specgen/_build/default/bin/specgen.exe check "$f"
+cd spec                      # the quoted diagnostics use spec-relative paths
+
+# the four detector diagnostics, in order
+for f in experiments/pre-cpuv4/ebpf_alu.kspec \
+         experiments/pre-cpuv4/stage1-enums.kspec \
+         experiments/pre-cpuv4/stage2-alu-rows.kspec \
+         experiments/pre-cpuv4/stage3-movsx.kspec; do
+  ./specgen/_build/default/bin/specgen.exe check "$f"
 done
 
-# the spec patch and its size
-sed -n '30,$p' spec/experiments/pre-cpuv4/ebpf_alu.kspec > /tmp/pre.kspec
-diff -u /tmp/pre.kspec spec/ebpf_alu.kspec
+# the spec patch and its size (the banner is delimited by a marker line, so
+# this does not depend on the banner's length)
+sed '1,/^# --- everything below this line/d' \
+    experiments/pre-cpuv4/ebpf_alu.kspec | sed '/./,$!d' > /tmp/pre.kspec
+wc -l /tmp/pre.kspec        # 119
+diff -u /tmp/pre.kspec ebpf_alu.kspec
 
 # fidelity: regenerating from the patched spec reproduces the committed F*
-make -C spec emit && diff -u fstar/Ebpf.Semantics.fst spec/out/Ebpf.Semantics.fst
-                     diff -u fstar/Ebpf.Serialize.fst spec/out/Ebpf.Serialize.fst
+make -C spec emit
+diff -u ../fstar/Ebpf.Semantics.fst out/Ebpf.Semantics.fst
+diff -u ../fstar/Ebpf.Serialize.fst out/Ebpf.Serialize.fst
 
-# everything, including the drift regression assertions (25 assertions)
+# everything, including the drift regression assertions (26 assertions)
 make -C spec test
+
+# the section 9 drafting experiment: the draft as written is rejected by K1,
+# and after the two one-line fixes the diagnostics name it passes 9/9
+./specgen/_build/default/bin/specgen.exe check experiments/pre-cpuv4/llm-draft.kspec
+cp experiments/pre-cpuv4/llm-draft.kspec /tmp/g.kspec
+sed -i 's/^enum alu_op.*/enum alu_op    { ADD ; SUB ; MUL ; DIV ; SDIV ; MOD ; SMOD ; AND ; OR ; XOR ; LSH ; RSH ; ARSH }/' /tmp/g.kspec
+./specgen/_build/default/bin/specgen.exe check /tmp/g.kspec        # now K5
+sed -i 's/if sval n s = 0 then 0 else/if s = 0 then 0 else/; s/if sval n s = 0 then d else/if s = 0 then d else/' /tmp/g.kspec
+./specgen/_build/default/bin/specgen.exe check /tmp/g.kspec        # 9/9
 ```
 
 The OCaml and F* toolchains live in the `test-clone` VM; see `spec/DESIGN.md`
@@ -415,7 +451,138 @@ The OCaml and F* toolchains live in the `test-clone` VM; see `spec/DESIGN.md`
 
 ---
 
-## 9. What §5.5 can claim
+## 9. Stretch — can a model draft the spec patch?
+
+### Protocol, and the exact limits of the blinding
+
+A fresh agent, with no access to this conversation, received **only**:
+
+1. a condensation of the KeelSpec grammar (`DESIGN.md` §2.4–2.6: the header
+   keyword table, the table rules, the complete combinator table, and the
+   checker rules it had to satisfy);
+2. the full text of the **pre-cpuv4** spec — stage 0 with its banner stripped,
+   because that banner names the four removals and would have handed over the
+   answer;
+3. a paraphrase, from memory and marked as such, of RFC 9669's descriptions of
+   the cpuv4 instructions.
+
+It was instructed to read no repository file and to answer from the prompt
+alone. It reported making exactly one tool call — a `Write` of its answer —
+and its draft is committed verbatim at
+`spec/experiments/pre-cpuv4/llm-draft.kspec`.
+
+**Blinding was by prompt construction and instruction, not by sandboxing:**
+`spec/ebpf_alu.kspec` was present on the same filesystem. The evidence that it
+was not read is behavioural, and it is what a reader should weigh:
+
+- the `exclude` reason string — free text, not derivable from anything supplied
+  — is worded entirely differently;
+- the draft **appends** `SDIV`/`SMOD` to the end of `alu_op`; the real file
+  interleaves them after `DIV`/`MOD`;
+- the draft's MOVSX `sem` reads `src@64`; the real file reads `src@n`;
+- the draft contains a divisor-guard error the real file does not have.
+
+Two strings do coincide (`13 ops x {W32,W64} x {reg,imm} = 52 instances` and
+`sext f n s`), and both are derivable from what was supplied: the pre-cpuv4
+file said `11 ops ... = 44 instances`, and 11 + 2 = 13, 13 × 2 × 2 = 52; the
+combinator table gives `sext F N e` and the grammar example names the width
+variables `n` and `f`.
+
+**What this measures, stated precisely.** The prompt handed over the enum case
+*names*, the `MovSX` constructor signature, "truncates toward zero" sitting
+next to a `trunc_div` combinator in the table, the exact BSWAP encoding, and
+the substance of the `(W32, SX32)` exclusion. So this measures **DSL
+translation of a well-specified change**, not ISA derivation from primary
+sources. Grade it asymmetrically: a pass is **weak** evidence, because most of
+the content was supplied; a failure would have been **strong** evidence, because
+it would mean the change could not be translated even when handed to it.
+
+### Result
+
+| state | `specgen check` |
+|---|---|
+| as drafted | **rejected** — `[K1] enum` `alu_op` `lists the right cases in the wrong order` |
+| after fix 1 (one line) | **rejected** — `[K5]` `` `trunc_div` needs a non-zero divisor, but `sval n (s)` may be zero here `` |
+| after fix 2 (one line) | **accepted** — 9/9 checks, 72 instances, `alu 52, neg 2, mov 4, movsx 5 (+1 excluded), swap 9` — identical counts to the real spec |
+
+### The two errors, and which check caught each — this is the finding
+
+1. **Enum case order** → **K1**, which printed both lists side by side. The
+   draft's stated reasoning was *"the true F* order is unknowable from the
+   prompt; appending is the minimal-diff convention for extending a datatype."*
+   Sound reasoning, wrong answer, caught unambiguously with the fix displayed.
+2. **Divisor guard** → **K5**, with a caret on the offending subterm. The draft
+   wrote `if sval n s = 0 then 0 else wrap n (trunc_div (sval n d) (sval n s))`,
+   reasoning that guarding on the *exact divisor expression* matched the
+   checker's stated rule most literally. It does not: K5's tracker records
+   non-zeroness for a **variable**, and separately accepts `sval n <nonzero
+   var>` as non-zero — so `if s = 0`, the real spec's form, is what passes.
+
+Neither error is one a reviewer would reliably catch by reading a 143-line
+table. Both were caught mechanically in 0.084 s, each with a diagnostic that
+named the fix.
+
+### The generated artifact
+
+Emitting from the corrected draft and diffing against the committed F*:
+
+- **every semantic arm is identical** — `alu_semn`'s SDIV/SMOD bodies,
+  `movsx_off`, `op_off`, `swap_sem`'s `Bswap` arm, `alu_defined`'s guard set,
+  `op_bits`' groupings;
+- **ordering differs**: `alu_semn` and `alu_defined` list SDIV/SMOD last
+  (match-arm order follows table row order, and the draft appended its rows),
+  and `movsx_bits` is emitted after `swap_bits` (definition order follows enum
+  declaration order). Cosmetic — a `match` over disjoint constructors;
+- **one real divergence**: `movsx_semn (s: int{fits 64 s})` where the committed
+  file has `(s: int{fits n s})`, caused by the draft reading `src@64` instead
+  of `src@n`. It is semantically equivalent — `sext f n s` inspects only the
+  low `f` bits — but it is a **weaker refinement type** than the hand-written
+  model carries. The fidelity test flags it as a diff; a human decides. That is
+  the pipeline behaving correctly: a defensible-but-different modelling choice
+  surfaces as a reviewable difference rather than as silence.
+- **re-verification: 10 of 16 modules pass, and the 11th did not finish.** The
+  draft's generated files were dropped into a scratch copy of `fstar/` and
+  `make verify` run cold. `Ebpf.Semantics` and `Ebpf.Serialize` — the two
+  generated files themselves — verify, and so does everything downstream of
+  them up to and including `Ebpf.Interval`, `Ebpf.Check` and **`Ebpf.Sound`**
+  (the abstract-domain soundness layer of §5 (b2)). `Ebpf.Annot` — the
+  certificate-checker bridge that holds the 85 manual lines of §5 (b1) — was
+  still running after **23 minutes** against a 4–5 minute baseline, and was
+  stopped there rather than left to run.
+
+  Not diagnosed to root cause; two candidates, **both cosmetic in ISA terms**:
+  (i) `alu_semn` is a plain (non-`unfold`) `let` referenced *by name* from
+  `Ebpf.Annot`'s `--z3rlimit 600` case analyses, so permuting its match arms
+  changes the SMT encoding that every one of those proofs sees; (ii) the
+  weaker `movsx_semn` refinement adds a `fits 32 x ==> fits 64 x` obligation
+  at each use site.
+
+  **This is the most useful thing the stretch produced.** Two specifications
+  can pass all nine meta-checks, generate arm-for-arm semantically identical
+  F*, and still differ enough to destabilise a downstream SMT proof. It is why
+  the fidelity gate is **byte identity** rather than semantic equivalence, and
+  why `DESIGN.md` §5 makes `unfold let` vs plain `let` a binding rule rather
+  than a style choice — the experiment walked straight into the hazard that
+  rule exists to prevent. It also says something about the residue: category
+  (b1) is not merely 85 lines of labour, it is 85 lines that are *brittle* to
+  changes which are invisible at the spec level.
+
+### What this licenses saying
+
+With the ISA content supplied, a model produced a spec patch that was **two
+checker-directed one-line fixes** away from a specification passing all nine
+meta-checks and generating semantically correct F* — which then verified
+through ten of sixteen modules before stalling the SMT-heaviest one. The
+meta-checks, not a human reader, did the reviewing; and where the meta-checks
+stopped being sufficient, the re-verification gate caught what was left. That
+is the same claim the rest of this document makes, arrived at from the other
+direction: **the review surface is small and mechanical, and the parts that are
+not mechanical are exactly the parts this pilot does not claim to have
+automated.**
+
+---
+
+## 10. What §5.5 can claim
 
 A maintainer — or a model — drafts a spec patch of **21 authored lines**. The
 pipeline projects it into **27 lines of F*** across five generated regions in

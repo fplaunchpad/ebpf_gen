@@ -115,12 +115,19 @@ echo "== MS5 drift experiment: the pre-cpuv4 spec must be REJECTED =="
 # check` must reject it with a K1 or K9 diagnostic that names the missing
 # instructions DIRECTIONALLY.  That is the drift detector, and this section
 # pins it so the experiment stays reproducible.  See spec/DRIFT.md.
-for f in experiments/pre-cpuv4/*.kspec; do
+# NB: the stage fixtures are listed explicitly, not globbed -- the directory
+# also holds llm-draft.kspec (section 9 of DRIFT.md), which is a verbatim
+# artifact carrying no `# EXPECT:` header and is asserted separately below.
+for f in experiments/pre-cpuv4/ebpf_alu.kspec experiments/pre-cpuv4/stage*.kspec; do
   want=$(grep -m1 '^# EXPECT: ' "$f" | sed 's/^# EXPECT: //')
   out=$("$SPECGEN" check "$f" 2>&1)
   rc=$?
   name=$(basename "$f")
-  if [ $rc -eq 0 ]; then
+  if [ -z "$want" ]; then
+    # otherwise `grep -qF ""` below matches anything and the fixture is
+    # asserted vacuously
+    bad "$name has no '# EXPECT: ' header (would assert nothing)"
+  elif [ $rc -eq 0 ]; then
     bad "$name was ACCEPTED (the drift detector did not fire)"
   elif ! echo "$out" | grep -qE "^$f:[0-9]+:[0-9]+: error: \[K[19]\]"; then
     bad "$name: expected a K1/K9 diagnostic with a file:line:col position"
@@ -147,6 +154,19 @@ for f in experiments/pre-cpuv4/*.kspec; do
     fi
   fi
 done
+
+# The section 9 drafting experiment: llm-draft.kspec is the blinded draft
+# EXACTLY as written, so it carries no headers and must not be edited.  Its
+# first error is the one DRIFT.md quotes.
+d=experiments/pre-cpuv4/llm-draft.kspec
+if out=$("$SPECGEN" check "$d" 2>&1); then
+  bad "llm-draft.kspec was ACCEPTED (DRIFT.md section 9 says K1 rejects it)"
+elif echo "$out" | grep -qF '[K1] enum `alu_op` lists the right cases in the wrong order'; then
+  ok "llm-draft.kspec rejected: [K1] alu_op case order (DRIFT.md section 9)"
+else
+  bad "llm-draft.kspec rejected with the wrong diagnostic"
+  printf '        got : %s\n' "$(echo "$out" | head -1)"
+fi
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
