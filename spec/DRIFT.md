@@ -518,6 +518,13 @@ it would mean the change could not be translated even when handed to it.
    non-zeroness for a **variable**, and separately accepts `sval n <nonzero
    var>` as non-zero — so `if s = 0`, the real spec's form, is what passes.
 
+And one error that **no** check caught: the draft's `exclude` reason string
+contains a non-ASCII em dash, which `DESIGN.md` §2.1 forbids ("ASCII only").
+The lexer does not enforce the rule it documents, so the file parsed. A small
+genuine gap in the meta-checks, surfaced by the experiment rather than by
+review — the same class of finding as the two above, and the reason
+`llm-draft.kspec` is committed unedited.
+
 Neither error is one a reviewer would reliably catch by reading a 143-line
 table. Both were caught mechanically in 0.084 s, each with a diagnostic that
 named the fix.
@@ -540,22 +547,28 @@ Emitting from the corrected draft and diffing against the committed F*:
   model carries. The fidelity test flags it as a diff; a human decides. That is
   the pipeline behaving correctly: a defensible-but-different modelling choice
   surfaces as a reviewable difference rather than as silence.
-- **re-verification: 10 of 16 modules pass, and the 11th did not finish.** The
-  draft's generated files were dropped into a scratch copy of `fstar/` and
-  `make verify` run cold. `Ebpf.Semantics` and `Ebpf.Serialize` — the two
-  generated files themselves — verify, and so does everything downstream of
-  them up to and including `Ebpf.Interval`, `Ebpf.Check` and **`Ebpf.Sound`**
-  (the abstract-domain soundness layer of §5 (b2)). `Ebpf.Annot` — the
-  certificate-checker bridge that holds the 85 manual lines of §5 (b1) — was
-  still running after **23 minutes** against a 4–5 minute baseline, and was
-  stopped there rather than left to run.
+- **re-verification: ten modules produced `.checked` artifacts; `Ebpf.Annot`
+  did not complete.** The draft's generated files were dropped into a scratch
+  copy of `fstar/` and `make verify` run cold. These ten verified against them:
+  `Ebpf.Ast`, `Ebpf.Int`, `Ebpf.Semantics`, `Ebpf.Interval`, `Ebpf.Check`,
+  `Ebpf.Sound`, `Ebpf.Build`, `Ebpf.Serialize`, `Ebpf.Formula`, `Ebpf.Proof` —
+  including both generated files themselves and the abstract-domain soundness
+  layer of §5 (b2). The eleventh module in build order, `Ebpf.Annot` — the
+  certificate-checker bridge holding the 85 manual lines of §5 (b1), and also a
+  consumer of the generated semantics — was still running after **23 minutes**
+  against a 4–5 minute baseline, and was stopped there. So it is *not* the case
+  that every downstream consumer passed: `Ebpf.Annot` is downstream too, and it
+  is the counterexample.
 
-  Not diagnosed to root cause; two candidates, **both cosmetic in ISA terms**:
-  (i) `alu_semn` is a plain (non-`unfold`) `let` referenced *by name* from
-  `Ebpf.Annot`'s `--z3rlimit 600` case analyses, so permuting its match arms
-  changes the SMT encoding that every one of those proofs sees; (ii) the
-  weaker `movsx_semn` refinement adds a `fits 32 x ==> fits 64 x` obligation
-  at each use site.
+  **Not diagnosed to a root cause, and the two candidates were not separated.**
+  They are the two ways the draft's output differs from the committed text, and
+  both are cosmetic in ISA terms: the permuted `alu_semn` / `alu_defined` match
+  arms, and the weaker `movsx_semn` refinement. An isolation run was attempted —
+  the corrected draft with *only* `src@64` reverted to `src@n`, leaving the arm
+  order permuted — but it shared the VM with a straggler `fstar.exe` from the
+  previous run and its timings are not trustworthy, so they are not reported
+  here. Separating the two is a clean follow-up on an idle machine; it was not
+  completed.
 
   **This is the most useful thing the stretch produced.** Two specifications
   can pass all nine meta-checks, generate arm-for-arm semantically identical
