@@ -1401,10 +1401,10 @@ emits as a single `match`):
 
 ### family `swap` — `Ebpf.Ast.Swap`
 
-- **AST constructor** — `Swap(k, z, dst)`
+- **AST constructor** — `Swap(k, sz, dst)`
 - **Key** — `k : swap_kind` (one table row per case)
-- **Form axes** — `z : swap_sz`
-- **Widths** — `m = bits z`
+- **Form axes** — `sz : swap_sz`
+- **Widths** — `m = bits sz`
 - **Semantics signature** — `sem (m; d = dst@64) : bits m`
 - **Definedness signature** — `defined (m)`
 - **Instances** — 9
