@@ -88,6 +88,110 @@ else
   bad "specgen emit ebpf_alu.kspec"
 fi
 rm -rf "$tmp"
+echo "== prose backend (out/isa-alu.md) =="
+prose_new=$(mktemp)
+if "$SPECGEN" prose ebpf_alu.kspec > "$prose_new" 2>/dev/null; then
+  ok "specgen prose ebpf_alu.kspec"
+else
+  bad "specgen prose ebpf_alu.kspec failed"
+fi
+
+# the committed artifact must be what the current generator produces
+if [ ! -f out/isa-alu.md ]; then
+  bad "out/isa-alu.md is missing (run 'make -C spec prose')"
+elif diff -q out/isa-alu.md "$prose_new" >/dev/null 2>&1; then
+  ok "out/isa-alu.md is up to date with the spec + generator"
+else
+  bad "out/isa-alu.md is STALE — regenerate with 'make -C spec prose'"
+  diff -u out/isa-alu.md "$prose_new" | head -20 | sed 's/^/        /'
+fi
+
+# COVERAGE: one prose section per IL instance, and one row per IL entry.
+# Ids come from `specgen list` / the family view, so a new instruction that
+# the prose backend forgets is a test failure, not a silent omission.
+ids=$(echo "$list" | grep -oE '^[a-z]+/[A-Za-z0-9_]+(/[A-Za-z0-9_]+)+' | sort -u)
+nid=$(echo "$ids" | grep -c .)
+miss=""
+# the id lists must number exactly what `specgen check` reported, so that a
+# broken extraction cannot make the coverage checks below pass vacuously
+want=$("$SPECGEN" check ebpf_alu.kspec 2>/dev/null |
+       sed -n 's/^OK: .* - \([0-9]*\) entries, \([0-9]*\) instances.*/\1 \2/p')
+want_e=${want% *}
+want_i=${want#* }
+if [ "$nid" = "$want_i" ]; then ok "instance id list is complete ($nid ids)"
+else bad "instance id extraction: got $nid ids, specgen check reports $want_i instances"; fi
+for id in $ids; do
+  # must be a `#### ` SECTION heading, not merely a row of the §3 encoding
+  # table (which also names every id, and would satisfy a bare grep)
+  grep -q "^#### .*\`$id\`\$" "$prose_new" || miss="$miss $id"
+done
+if [ -z "$miss" ]; then ok "prose covers all $nid instances (one section each)"
+else bad "prose is missing sections for:$miss"; fi
+
+ents=$(echo "$list" | awk '/^family /{f=$2} /^  entry /{print f "/" $2}')
+nent=$(echo "$ents" | grep -c .)
+missE=""
+if [ "$nent" = "$want_e" ]; then ok "entry id list is complete ($nent ids)"
+else bad "entry id extraction: got $nent ids, specgen check reports $want_e entries"; fi
+for e in $ents; do
+  # must be a row of a family's width-generic entry table: `family/ENTRY` in
+  # the first cell (instance headings carry `family/ENTRY/...`, so the
+  # trailing backtick keeps them from matching)
+  grep -q "^| \`$e\` |" "$prose_new" || missE="$missE $e"
+done
+if [ -z "$missE" ]; then ok "prose covers all $nent table entries (width-generic row each)"
+else bad "prose is missing entry rows for:$missE"; fi
+
+# section count == instance count: no duplicate and no extra sections
+nsec=$(grep -c '^#### ' "$prose_new")
+if [ "$nsec" = "$nid" ]; then ok "exactly $nsec instruction sections for $nid instances"
+else bad "prose has $nsec instruction sections but the IL has $nid instances"; fi
+
+# mnemonic anchors: the assembly stems are the ONE naming the IL does not
+# carry (emit_prose.ml), so pin them against ir/SPEC.md section 3
+mnem() {           # instance-id  expected-mnemonic-line
+  if grep -qF "#### \`$2\` — \`$1\`" "$prose_new"; then ok "$1 = \`$2\` (stem+width per ir/SPEC.md sec. 3)"
+  else bad "$1: expected mnemonic \`$2\`; got: $(grep -F "\`$1\`" "$prose_new" | head -1)"; fi
+}
+mnem alu/SDIV/W32/imm       "sdiv32 dst, imm"
+mnem movsx/MOVSX/W64/SX32   "movsx32_64 dst, src"
+mnem swap/ToLE/SW16         "le16 dst"
+mnem swap/ToBE/SW64         "be64 dst"
+mnem swap/Bswap/SW32        "bswap32 dst"
+mnem neg/NEG/W32            "neg32 dst"
+
+# content anchors: the derived statements the RFC/CONSTRAINTS cross-check
+# (spec/PROSE-CHECK.md) hangs on.  Each is rendered from the AST, so a
+# semantics change in the .kspec must show up here.
+say() {            # description  literal-text
+  if grep -qF "$2" "$prose_new"; then ok "$1"
+  else bad "$1: not found in the generated prose: $2"; fi
+}
+say "C5  div-by-zero result stated" \
+  'dst = (src != 0) ? ((dst / src) mod 2^64) : 0'
+say "C8  shift amount masked to the width" \
+  '2 raised to the power (the unsigned remainder of the source register value divided by 64)'
+say "C10 ALU32 result zero-extended into the 64-bit register" \
+  'writing a 32-bit value into the 64-bit destination register clears bits 32..63 (zero extension)'
+say "C12 SDIV is truncated toward zero, then wrapped" \
+  'truncated toward zero), reduced modulo 2^64 (two'\''s-complement wrap-around)'
+say "C13 (W32, SX32) is excluded, with its reason" \
+  'the kernel rejects BPF_ALU|BPF_MOV|BPF_X with off=32'
+say "C14 TO_LE on a little-endian host is a truncation" \
+  'stated for a **little-endian** host'
+say "C14 byte-swap sections state the byte reversal" \
+  'the low 4 bytes of the destination value in reverse order'
+say "C4/C7 immediates are rejected in BOTH modes (stated in 1.5)" \
+  'a zero *immediate* divisor and an out-of-range *immediate* shift'
+# a regression guard, not an anchor: the per-instruction definedness text once
+# claimed blanket kernel-mode acceptance, which C4/C7 deny for immediate forms
+nosay() {          # description  text-that-must-NOT-appear
+  if grep -qF "$2" "$prose_new"; then bad "$1: forbidden text is back: $2"
+  else ok "$1"; fi
+}
+nosay "no blanket kernel-mode acceptance claim per instruction" \
+  'kernel mode accepts the instruction without one'
+rm -f "$prose_new"
 
 echo "== negative fixtures =="
 for f in tests/neg/*.kspec; do

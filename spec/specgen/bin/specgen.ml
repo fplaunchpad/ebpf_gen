@@ -2,6 +2,7 @@
 
    specgen check    <file.kspec>       parse, elaborate, run meta-checks K1-K9
    specgen list     <file.kspec>       print the flattened instance table
+   specgen prose    <file.kspec>       emit the RFC-style prose spec (stdout)
    specgen astcheck <Ebpf.Ast.fst>     diff the built-in AST table vs the real one
    specgen emit     <file.kspec> <fstar-dir> <out-dir>
                                        splice the generated F* regions of
@@ -14,6 +15,7 @@ let usage () =
     "usage:\n\
     \  specgen check    <file.kspec>\n\
     \  specgen list     <file.kspec>\n\
+    \  specgen prose    <file.kspec>\n\
     \  specgen astcheck <path/to/Ebpf.Ast.fst>\n\
     \  specgen emit     <file.kspec> <fstar-dir> <out-dir>";
   exit 2
@@ -158,6 +160,18 @@ let () =
        list_families sp;
        print_newline ();
        list_instances sp
+     with
+     | Kpos.Kerr (p, m) -> prerr_string (Kpos.render p m); exit 1
+     | Sys_error m -> prerr_endline m; exit 1
+     | e -> Printf.eprintf "specgen internal error: %s\n" (Printexc.to_string e); exit 3)
+  | _ :: "prose" :: file :: [] ->
+    (* the prose backend: the document goes to stdout so the Makefile owns
+       the output path and `tests/run.sh` can diff a fresh render against
+       the committed spec/out/isa-alu.md *)
+    (try
+       let sf = Parse.parse_file file in
+       let sp, _ = Elab.elab sf in
+       print_string (Emit_prose.render file sp)
      with
      | Kpos.Kerr (p, m) -> prerr_string (Kpos.render p m); exit 1
      | Sys_error m -> prerr_endline m; exit 1
