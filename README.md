@@ -79,6 +79,7 @@ theorem, not a test suite.
 | **M2.2** | Userspace pipeline: `.kir` parser, certifying prover, `irc` certifier around the extracted verified checker | **Done.** DSL/hand programs certify + load on kernel 7.0; `irc selftest` shows forged/transplanted certificates rejected. |
 | **M2.3** | High-level ALU expression **DSL** (`Ebpf.Dsl`) → verified lowering + register allocation → `.kir` → certificate + bytecode | **Done.** 14-program corpus: all certify (verified), load ACCEPT on kernel 7.0, and `BPF_PROG_TEST_RUN` result matches the DSL evaluator. [`ir/dsl/`](ir/dsl/) |
 | **M2.4** | Certificate-size / proof-step / check-time measurements | **Done.** avg 3.1 proof steps, ~123 B certs, ~1–4 µs checks. [`ir/MEASUREMENTS.md`](ir/MEASUREMENTS.md) |
+| **MS** | **KeelSpec** mechanized-spec pilot: one spec source (`spec/ebpf_alu.kspec`) generates the F* semantics core + encoding tables + RFC-style prose; drift experiment | **Done.** Swap gate green (16/16 modules re-verify on generated code, zero downstream proof edits); kernel-differential green on the generated model; cpuv4 drift replay measured. [`spec/`](spec/) |
 
 **Milestone 2 is complete**: published IR spec, verified metatheory (15 F*
 modules, no admits), a working front-to-kernel pipeline, a high-level DSL
@@ -91,11 +92,22 @@ straight-line write-a-register fragment (SDIV/SMOD, ALU32/mov32/neg32, MOVSX
 and byte swaps included — the M2.1 definition-term bridge); *an accepted
 program runs safely, for any certificate*; and, in strict (Defensive) mode,
 no div-by-zero or oversized shift occurs and every asserted bound holds. All
-soundness is *relative to the trusted `Ebpf.Semantics` model*, which is
-differentially validated against the real kernel (7.0): `diff.py` checks
-accept/reject verdicts and `valcheck.py` checks `BPF_PROG_TEST_RUN` return
-values against the model — now covering SDIV/SMOD (toward-zero), MOVSX
-(sign-extension) and byte swaps, not just the W64 arithmetic corpus.
+soundness is *relative to the trusted `Ebpf.Semantics` model* — whose
+**semantic core is no longer hand-written**: `alu_semn`, `alu_defined`, the
+width tables and `Ebpf.Serialize`'s encoding tables are **generated from the
+reviewed spec source [`spec/ebpf_alu.kspec`](spec/ebpf_alu.kspec)** (KeelSpec,
+in the spirit of Wasm SpecTec), validated two independent ways: the
+**swap gate** (all 16 modules re-verify on the generated code with zero
+downstream proof edits, and `make -C spec test` proves generation is
+byte-idempotent) and the **kernel differential** (`diff.py` accept/reject
+verdicts and `valcheck.py` `BPF_PROG_TEST_RUN` values, on Linux 7.0, covering
+SDIV/SMOD toward-zero, MOVSX sign-extension and byte swaps — including a
+negative pin that the kernel, like the model, rejects the invalid
+`(W32,SX32)` MOVSX form). The same spec source also generates the RFC-style
+prose specification ([`spec/out/isa-alu.md`](spec/out/isa-alu.md)); the drift
+experiment ([`spec/DRIFT.md`](spec/DRIFT.md)) replays cpuv4 as a **21-line
+spec edit** and measures what stays manual (85 lines of bridge proof — see
+its §0 for the honest boundary).
 **Staged for later milestones (documented, not assumed):** control flow (v1)
 and memory (v2); W32-register div/shift under strict mode; a binary
 certificate file format; a verified lowering; and the Dafny frontend.
@@ -104,10 +116,17 @@ certificate file format; a verified lowering; and the Dafny frontend.
 
 ```
 ir/SPEC.md          The Keel IR specification (the design; tool-neutral)
+spec/               KeelSpec: the mechanized ISA spec (single source of truth)
+  ebpf_alu.kspec    the spec source — semantics + encodings + definedness
+  specgen/          OCaml checker/generator (meta-checks K1–K9; F*+prose backends)
+  out/isa-alu.md    GENERATED RFC-style prose spec (committed, staleness-checked)
+  DESIGN.md         DSL grammar, IL, backend contracts, trust story
+  DRIFT.md          the cpuv4 drift-replay experiment + numbers
 fstar/              F* development (the metatheory)
   Ebpf.Ast          instruction syntax
   Ebpf.Int          bitvector arithmetic helpers          } trusted
-  Ebpf.Semantics    the ISA model (what a program does)    } spec
+  Ebpf.Semantics    the ISA model — semantic core GENERATED  } spec
+                    from spec/ebpf_alu.kspec (frame hand-written)
   Ebpf.Interval     unsigned-interval abstract domain (+ soundness)
   Ebpf.Check        M1 dual-mode (strict/kernel) checker
   Ebpf.Sound        M1 soundness theorem

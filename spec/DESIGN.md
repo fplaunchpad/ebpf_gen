@@ -385,6 +385,15 @@ its expected diagnostic *and* a position).
 
 ## 5. Backend contracts (later milestones — MS2/MS3/MS4)
 
+> **Numbering erratum (post-execution).** This section's staging labels
+> predate execution and differ from the plan as run: the encoding backend
+> (called "MS3" below) landed *inside* MS2, the prose backend (called "MS4"
+> below) was executed as **MS3** (merged via PR #2), the kernel differential
+> was **MS4**, and the drift experiment was **MS5** (`DRIFT.md`, PR #1). The
+> contracts themselves are unchanged and were implemented as written; see
+> `plan.md`'s MS section for the executed record. Kept as-is to avoid
+> renumbering cross-references.
+
 ### F* semantics backend (MS2) — consumes `s_families` + `s_enums`
 
 Generates, for each family, one width-generic total function plus (for

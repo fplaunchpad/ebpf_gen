@@ -75,6 +75,14 @@ Bit-vector arithmetic phrased as math-integer ops with an explicit wrap.
 ## `Ebpf.Semantics.fst` — the ISA model (**TRUSTED — the core spec**)
 
 This is *the* definition of program behavior. Review it against RFC 9669.
+**Since the KeelSpec pilot (MS2), the semantic core is GENERATED**: the
+`BEGIN/END GENERATED` regions (`alu_semn`, `alu_defined`, the width tables,
+`swap_sem`, and the `unfold` `neg/mov/movsx_semn`) are emitted by `specgen`
+from `spec/ebpf_alu.kspec`, so the file to review by eye is the *spec source*
+(one table, ~143 lines) plus the hand-written frame here (`stepx`/`runx`,
+operand read/write-back). `make -C spec test` proves the committed text is
+byte-identical to what the generator emits; the review discipline for the
+generated regions is therefore "review the spec, trust the fidelity check".
 - `regfile = reg -> option U64.t` — a machine state; `None` = uninitialized.
 - `bits w` — 32 or 64.
 - `regbits w x` — register `x` viewed at width `w` (W32 = low 32 bits).
@@ -328,5 +336,14 @@ Connects arena terms to the ISA semantics.
   compares accept/reject verdicts and `valcheck.py` compares
   `BPF_PROG_TEST_RUN` return values to the model. The M2.1 opcodes
   (SDIV/SMOD toward-zero, MOVSX sign-extension, byte swaps) are now exercised
-  both ways — verdicts *and* computed values match the real kernel.
+  both ways — verdicts *and* computed values match the real kernel, including
+  a negative pin (`ex_movsx32_32`): the kernel, like the model since the
+  KeelSpec D1 fix, rejects the invalid `(W32,SX32)` MOVSX encoding.
+- Since the KeelSpec pilot, the trusted core is **generated from
+  `spec/ebpf_alu.kspec`** and the trust argument is layered: the spec source
+  is the reviewed object; the generator is untrusted (its output must
+  re-verify against the entire proof stack — the "swap gate" — and pass the
+  kernel differential); `make -C spec test` pins byte-fidelity. The drift
+  cost of a real ISA change is measured in `spec/DRIFT.md` (cpuv4: 21-line
+  spec edit; 85 lines of bridge proof remain manual by design).
 - No step here is `admit`ted. "Staged" means *absent*, not *assumed*.

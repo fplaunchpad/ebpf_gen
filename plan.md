@@ -355,20 +355,56 @@ verification or the differential — never a silent unsoundness.
 - [x] 6 negative fixtures + encoding anchors vs `Ebpf.Serialize` +
       the drift check, wired into `make -C spec test` (15 assertions)
 
-## MS2 — F* semantics backend (staged)
-Generate `Ebpf.Semantics.{alu_semn, alu_defined, movsx_bits, swap_bits,
-swap_sem}` — already named and referenced by name across `Ebpf.Interval`,
-`Ebpf.Sound` and `Ebpf.Annot`, so they stay plain `let` — plus
-`neg_semn`, `mov_semn`, `movsx_semn`, which are inline in `stepx` today and
-must be emitted as `unfold let` so every downstream proof term stays
-textually identical. Acceptance = `make verify` passes unchanged and the
-differential harness stays at zero divergences. MS2 also lands the MOVSX
-guard fix (`f <= bits w` -> `f < bits w`, see `spec/DESIGN.md` section 8).
+## MS2 — F* semantics + encoding backends — DONE
+(Executed-plan numbering; DESIGN.md's original staging split these across
+"MS2/MS3" — the encoding tables landed together with the semantics.)
+- [x] `specgen emit` splices 5 BEGIN/END generated regions into
+  `Ebpf.Semantics.fst` (alu_semn, width tables + swap_sem + the `unfold`
+  neg/mov/movsx_semn, alu_defined) and `Ebpf.Serialize.fst` (cls/op_bits/
+  op_off/src_bit, movsx_off/swap_imm); `make -C spec promote` + fidelity test
+  (byte-identical regeneration).
+- [x] Swap gate GREEN: 16/16 modules re-verify with zero downstream proof
+  edits (7m54s cold vs 7m53s pre-KeelSpec baseline); extract + `irc selftest`
+  unchanged. Text converged — no equivalence-lemma fallback needed.
+- [x] D1 MOVSX guard fix landed (`f <= bits w` was a tautology; now
+  `f < bits w`). FINDING: a generated refinement must EQUAL the frame's
+  guard, not merely be implied by it — the `{f <= n}` variant stalled
+  `Ebpf.Annot` >31min; the `{f < n}` variant verifies in 4m43s.
 
-## MS3 — encoding backend (staged)
-Generate `Ebpf.Serialize.{cls, op_bits, op_off, movsx_off, swap_imm,
-encode_insn}` + an encode/decode round-trip corpus from the same instances.
+## MS3 — prose backend — DONE (merged via PR #2)
+- [x] `specgen prose` → `spec/out/isa-alu.md` (committed, staleness-checked):
+  72 instruction sections transliterated from `sem`/`defined` by structural
+  recursion; prose never authored. Scaffolding rule (found the hard way):
+  scaffolding may say nothing true of one instruction and false of another.
+- [x] `spec/PROSE-CHECK.md` — RFC 9669 / CONSTRAINTS cross-check + the
+  P1–P13 expressiveness-limit findings (P4 imm sign-extension invisible;
+  P9 "cannot express what does not happen"; P13 division wording
+  fragment-local).
 
-## MS4 — prose backend (staged)
-Derive the per-instruction prose tables from `sem`/`defined` by structural
-recursion; prose is never authored, so it cannot drift.
+## MS4 — kernel-differential re-validation of the generated model — DONE
+- [x] 20-program verdict diff on kernel 7.0: no divergences; 6-program
+  value diff: all match. New negative pin `ex_movsx32_32`: the kernel
+  rejects the invalid (W32,SX32) MOVSX form, closing the C13 loop
+  (spec = checker = model = kernel).
+
+## MS5 — drift experiment (cpuv4 replay) — DONE (merged via PR #1)
+- [x] `spec/DRIFT.md`: pre-cpuv4 spec reconstruction + staged worklist;
+  K1/K9 directional detector output pinned as expected-fail fixtures.
+  Numbers: 21-line spec patch → 27 regenerated F* lines across 5 regions;
+  pipeline 0.17s of an 8m10s regenerate-verify cycle; manual residue 174
+  lines (85 = kernel-TCB bridge proof, manual by design). Boundary stated:
+  measures "spec lags the AST", not "spec lags the kernel".
+- [x] Blinded LLM spec-drafting stretch: 2 checker-directed fixes from 9/9;
+  load-bearing finding is the failure mode — a semantically-equivalent but
+  reordered draft stalled `Ebpf.Annot` >23min, vindicating byte-identity as
+  the fidelity gate.
+
+## MS measurements (docs milestone)
+| artifact | LoC |
+|---|---|
+| spec source `ebpf_alu.kspec` (reviewed) | **143** |
+| generated F* regions (semantics + encoding) | 118 |
+| generated prose `isa-alu.md` | 1,690 |
+| **generation ratio** | **143 → 1,808 (≈12.6×)**; Wasm SpecTec's own metric: 2,957 → 5,526 reST (1.9×) |
+| specgen tool (untrusted, one-time) | 3,881 OCaml |
+| spec docs (DESIGN + DRIFT + PROSE-CHECK) | 1,546 |

@@ -17,6 +17,26 @@ provide it. `opam env` is what makes `fstar.exe` resolve.)
 
 ---
 
+## 0. Check the mechanized spec + generated-code fidelity (KeelSpec)
+
+The semantic core of `Ebpf.Semantics`/`Ebpf.Serialize` is GENERATED from
+`spec/ebpf_alu.kspec`. This suite (48 assertions) parses the spec, runs
+meta-checks K1–K9, checks the encoding anchors, proves the committed F*
+matches what the generator emits **byte-for-byte** (fidelity), does the same
+for the committed prose spec `spec/out/isa-alu.md`, rejects 6 malformed-spec
+fixtures with positioned diagnostics, and runs the MS5 drift-detector
+regression (the pre-cpuv4 spec must be rejected with directional K1/K9
+errors):
+
+```
+multipass exec test-clone -- bash -c \
+  'eval $(opam env --switch=default) && make -C /home/ubuntu/ebpf_gen/spec test'
+```
+
+Expect `48 passed, 0 failed`. After editing the spec: `make -C spec promote`
+regenerates the F* files, and step 1 below (full verify) is the faithfulness
+gate. `spec/DRIFT.md` documents what a real ISA change costs end to end.
+
 ## 1. Verify the F* development (the proofs)
 
 This is the primary test: if it verifies, every theorem and refinement in
