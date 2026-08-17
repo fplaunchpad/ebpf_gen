@@ -31,7 +31,17 @@ cd ../../fstar && make extract          # extract verified modules to OCaml
 cd ../ir/certifier && make build        # copy them in + dune build
 make run F=../examples/mul.kir          # certify a program
 make selftest                           # adversarial checks (see below)
+
+# write the proof certificate to a file (textual v0):
+./_build/default/bin/irc.exe ../examples/div.kir -o div.kcert
 ```
+
+`-o FILE` writes the certificate `irc` just validated: per claim, the goal
+atom and the numbered proof-rule steps (`#i` cites step i's conclusion) in
+SMT-LIB-flavoured s-expressions. Conclusions are never stored — the checker
+recomputes them (SPEC §7) — so the file contains only derivations. It is a
+faithful textual rendering of the certificate; the compact binary arena
+format (SPEC §8) remains staged.
 
 ## What the demos show
 

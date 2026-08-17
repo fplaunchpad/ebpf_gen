@@ -328,6 +328,64 @@ let rule_prems (r: P.rule) : int =
 let step_bytes (r: P.rule) : int =
   3 + rule_prems r + List.fold_left (fun acc t -> acc + tbytes t) 0 (rule_terms r)
 
+(* ---------- textual certificate emission (irc <file.kir> -o FILE) ----------
+   Prints the exact rule stream the VERIFIED check_proof replayed, as
+   SMT-LIB-flavoured s-expressions (SPEC §4 spellings). Step conclusions are
+   deliberately NOT stored — the checker recomputes them (SPEC §7, the
+   BCF-style anti-forgery discipline); a proof file therefore contains only
+   derivations, never statements. The §8 binary arena format is staged; this
+   textual form is the same certificate, readable. *)
+let op2_name (o: F.bvop2) : string =
+  match o with
+  | F.Add -> "bvadd" | F.Sub -> "bvsub" | F.Mul -> "bvmul"
+  | F.Udiv -> "bvudiv" | F.Sdiv -> "bvsdiv" | F.Urem -> "bvurem" | F.Srem -> "bvsrem"
+  | F.And -> "bvand" | F.Or -> "bvor" | F.Xor -> "bvxor"
+  | F.Shl -> "bvshl" | F.Lshr -> "bvlshr" | F.Ashr -> "bvashr"
+let op1_name (o: F.bvop1) : string =
+  match o with F.Not -> "bvnot" | F.Neg -> "bvneg"
+let kind_name (k: F.atomkind) : string =
+  match k with
+  | F.KEq -> "=" | F.KNe -> "distinct" | F.KUle -> "bvule"
+  | F.KUlt -> "bvult" | F.KUge -> "bvuge"
+let rec tstr (t: F.term) : string =
+  match t with
+  | F.TC (w, v) -> Printf.sprintf "(_ bv%s %s)" (Z.to_string v) (Z.to_string w)
+  | F.TOp2 (o, a, b) -> Printf.sprintf "(%s %s %s)" (op2_name o) (tstr a) (tstr b)
+  | F.TOp1 (o, a) -> Printf.sprintf "(%s %s)" (op1_name o) (tstr a)
+  | F.TConcat (a, b) -> Printf.sprintf "(concat %s %s)" (tstr a) (tstr b)
+  | F.TExtract (hi, lo, a) ->
+    Printf.sprintf "((_ extract %s %s) %s)" (Z.to_string hi) (Z.to_string lo) (tstr a)
+  | F.TZext (n, a) -> Printf.sprintf "((_ zero_extend %s) %s)" (Z.to_string n) (tstr a)
+  | F.TSext (n, a) -> Printf.sprintf "((_ sign_extend %s) %s)" (Z.to_string n) (tstr a)
+  | F.TIte (c, a, b) -> Printf.sprintf "(ite %s %s %s)" (astr c) (tstr a) (tstr b)
+and astr (a: F.atom) : string =
+  match a with F.Atom (k, x, y) -> Printf.sprintf "(%s %s %s)" (kind_name k) (tstr x) (tstr y)
+
+let rule_str (r: P.rule) : string =
+  let p i = "#" ^ Z.to_string i in
+  match r with
+  | P.R_EvalEq t -> Printf.sprintf "(EvalEq %s)" (tstr t)
+  | P.R_UleConst (a, b) -> Printf.sprintf "(UleConst %s %s)" (tstr a) (tstr b)
+  | P.R_UltConst (a, b) -> Printf.sprintf "(UltConst %s %s)" (tstr a) (tstr b)
+  | P.R_UgeConst (a, b) -> Printf.sprintf "(UgeConst %s %s)" (tstr a) (tstr b)
+  | P.R_NeConst (a, b) -> Printf.sprintf "(NeConst %s %s)" (tstr a) (tstr b)
+  | P.R_UleRefl t -> Printf.sprintf "(UleRefl %s)" (tstr t)
+  | P.R_EqRefl t -> Printf.sprintf "(EqRefl %s)" (tstr t)
+  | P.R_AndLeL t -> Printf.sprintf "(AndLeL %s)" (tstr t)
+  | P.R_AndLeR t -> Printf.sprintf "(AndLeR %s)" (tstr t)
+  | P.R_ShrLe t -> Printf.sprintf "(ShrLe %s)" (tstr t)
+  | P.R_DivLe (i, t) -> Printf.sprintf "(DivLe %s %s)" (p i) (tstr t)
+  | P.R_ShrBound (i, t) -> Printf.sprintf "(ShrBound %s %s)" (p i) (tstr t)
+  | P.R_MonoAdd (i, j, t) -> Printf.sprintf "(MonoAdd %s %s %s)" (p i) (p j) (tstr t)
+  | P.R_MonoMul (i, j, t) -> Printf.sprintf "(MonoMul %s %s %s)" (p i) (p j) (tstr t)
+  | P.R_TransUle (i, j) -> Printf.sprintf "(TransUle %s %s)" (p i) (p j)
+  | P.R_NeFromUge i -> Printf.sprintf "(NeFromUge %s)" (p i)
+  | P.R_EqUle i -> Printf.sprintf "(EqUle %s)" (p i)
+  | P.R_DivIteLe (i, t) -> Printf.sprintf "(DivIteLe %s %s)" (p i) (tstr t)
+  | P.R_DivIteBound (i, j, t) -> Printf.sprintf "(DivIteBound %s %s %s)" (p i) (p j) (tstr t)
+  | P.R_ModLe t -> Printf.sprintf "(ModLe %s)" (tstr t)
+  | P.R_ModBound (i, j, t) -> Printf.sprintf "(ModBound %s %s %s)" (p i) (p j) (tstr t)
+
 (* collect (goal, proof) for each certifiable claim of a program *)
 let certify_claims (prog: A.program) (claims: claim list) : (F.atom * P.rule list) list =
   List.filter_map (fun c ->
@@ -375,6 +433,12 @@ let () =
   if Array.length Sys.argv > 1 && Sys.argv.(1) = "selftest" then (selftest (); exit 0);
   if Array.length Sys.argv > 2 && Sys.argv.(1) = "measure" then (measure Sys.argv.(2); exit 0);
   let file = if Array.length Sys.argv > 1 then Sys.argv.(1) else "/dev/stdin" in
+  let emit_path =
+    let rec find i =
+      if i + 1 >= Array.length Sys.argv then None
+      else if Sys.argv.(i) = "-o" then Some Sys.argv.(i + 1)
+      else find (i + 1) in
+    find 2 in
   let ic = open_in file in
   let n = in_channel_length ic in
   let text = really_input_string ic n in
@@ -389,6 +453,7 @@ let () =
 
   (* step 3+4: certify each claim *)
   let total_proof_steps = ref 0 in
+  let cert_rows : (int * F.atom * P.rule list * bool) list ref = ref [] in
   List.iteri (fun ci c ->
     match binding_at prog c.after c.reg with
     | None -> Printf.printf "claim %d: register unbound at that point — cannot certify\n" ci
@@ -398,6 +463,7 @@ let () =
          let proof = prove_claim c.kind t c.bound in
          let ok = P.check_proof [] goal proof in    (* VERIFIED proof checker *)
          total_proof_steps := !total_proof_steps + List.length proof;
+         cert_rows := (ci, goal, proof, ok) :: !cert_rows;
          Printf.printf "claim %d (%s %s %s): prover emitted %d step(s); [verified] check_proof = %b\n"
            ci (reg_name c.reg) (cmp_name c.kind) (Z.to_string c.bound) (List.length proof) ok;
          if not ok then Printf.printf "  !! verified checker REJECTED the synthesized proof\n"
@@ -408,4 +474,26 @@ let () =
   let hex = S.serialize_hex prog in
   Printf.printf "[verified] bytecode (%d bytes): %s\n" (String.length hex / 2) hex;
   Printf.printf "summary: %d claim(s), %d total proof step(s)\n"
-    (List.length claims) !total_proof_steps
+    (List.length claims) !total_proof_steps;
+
+  (* step 6 (optional, -o FILE): write the certificate as a proof file *)
+  match emit_path with
+  | None -> ()
+  | Some out ->
+    let oc = open_out out in
+    Printf.fprintf oc "; Keel proof certificate (textual v0) — generated by irc\n";
+    Printf.fprintf oc "; program : %s\n" file;
+    Printf.fprintf oc "; bytecode: %s\n" hex;
+    Printf.fprintf oc "; validity: every step list below was replayed and ACCEPTED by the\n";
+    Printf.fprintf oc ";           VERIFIED checker (Ebpf_Proof.check_proof) before writing.\n";
+    Printf.fprintf oc "; format  : one s-expression per step; #i cites the conclusion of step i.\n";
+    Printf.fprintf oc ";           Step conclusions are never stored — the checker recomputes\n";
+    Printf.fprintf oc ";           them (ir/SPEC.md §7). Binary arena format (§8) is staged.\n";
+    List.iter (fun (ci, goal, proof, ok) ->
+      Printf.fprintf oc "\n(claim %d\n  (goal %s)\n  (steps %d) (est-bytes %d) (check_proof %b)\n"
+        ci (astr goal) (List.length proof)
+        (List.fold_left (fun a r -> a + step_bytes r) 0 proof) ok;
+      List.iteri (fun i r -> Printf.fprintf oc "  (%d %s)\n" i (rule_str r)) proof;
+      Printf.fprintf oc ")\n") (List.rev !cert_rows);
+    close_out oc;
+    Printf.printf "wrote certificate: %s\n" out
